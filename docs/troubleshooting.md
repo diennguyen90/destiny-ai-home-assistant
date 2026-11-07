@@ -32,7 +32,7 @@ You see: `Home Assistant at ... did not return JSON. It may not be set up yet (f
 
 ### `FAIL ha-api: HA_TOKEN is empty in .env`
 
-You see: `HA_TOKEN is empty in .env`, and the conversation checks say `skipped: no token`.
+You see: `HA_TOKEN is empty in .env`, and the `conversation` and `multi-turn` checks say `skipped: no token`.
 
 - Fix: create a token. In Home Assistant click your name (bottom left) > Security tab > Long-lived access tokens > Create token. Copy it, open `.env` in Notepad, paste it after `HA_TOKEN=` (no quotes or spaces), and save.
 
@@ -54,7 +54,7 @@ You see: `Home Assistant conversation agent reported an error: <some message>`, 
 
 You see: `answer does not mention Saturday, so context was lost: ...`
 
-- Cause: the follow-up was not treated as part of the same conversation. Try again. If it repeats, check the agent settings (Haiku model chosen, instructions pasted, "Control Home Assistant" on).
+- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "Saturday" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (Haiku model chosen, instructions pasted, "Control Home Assistant" on).
 
 ### The smoke test hangs, or reports a protocol error on whisper or piper
 
@@ -66,7 +66,7 @@ You see the test sit for a long time, or messages like `Connection closed while 
 ### The smoke test will not start, or ignores your settings
 
 - "python is not recognized" or a syntax error: the smoke test needs Python 3.8 or newer. Check with `python --version`, and install Python from https://www.python.org/ if needed.
-- Garbled settings, or values seem ignored: the `.env` file may have been saved as UTF-16, which happens if it was created with PowerShell `>` redirection. Open `.env` in Notepad, choose File > Save As, set Encoding to `UTF-8`, and save over it.
+- The smoke test crashes with a long Python error message ending in `UnicodeDecodeError` (and `docker compose` may also complain about `.env`): the `.env` file may have been saved as UTF-16, which happens if it was created with PowerShell `>` redirection. Open `.env` in Notepad, choose File > Save As, set Encoding to `UTF-8`, and save over it.
 - Windows line endings, comments, blank lines and quoted values in `.env` are all handled automatically; you do not need to fix them.
 
 ## Docker and startup problems
