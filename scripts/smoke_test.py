@@ -13,6 +13,8 @@ from scripts.ha_client import HAError, ha_converse, ha_ping  # noqa: E402
 from scripts.wyoming_client import WyomingError, piper_synthesize, wyoming_describe  # noqa: E402
 
 Result = Tuple[str, bool, str]
+NO_AGENT_HINT = (" (HA_AGENT_ID is empty, so Home Assistant's built-in agent answered, "
+                 "not Claude; see docs/setup-windows.md)")
 NO_TOKEN = "HA_TOKEN is empty in .env — see docs/setup-windows.md"
 
 
@@ -85,6 +87,9 @@ def run_checks(env):
         state["cid"] = cid
         return "answer: %s" % speech
     record("conversation", conv)
+    if agent is None:
+        name, ok, detail = results[-1]
+        results[-1] = (name, ok, detail + NO_AGENT_HINT)
 
     if not results[-1][1]:
         results.append(("multi-turn", False, "skipped: conversation check failed"))

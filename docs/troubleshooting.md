@@ -48,7 +48,14 @@ You see: `Home Assistant rejected the token (HTTP 401). Create a long-lived toke
 You see: `Home Assistant conversation agent reported an error: <some message>`, for example a message that the agent is not available or could not understand.
 
 - Cause: usually the Anthropic agent is not set up, the API key is invalid or out of credit, or the Destiny pipeline is not using the Anthropic agent.
-- Fix: check Settings > Devices & services > Anthropic shows no error; check your API key and spend limit at https://console.anthropic.com/; check Settings > Voice assistants > Destiny uses the Anthropic agent. If you set `HA_AGENT_ID` in `.env`, make sure it is correct, or leave it blank.
+- Fix: check Settings > Devices & services > Anthropic shows no error; check your API key and spend limit at https://console.anthropic.com/; check Settings > Voice assistants > Destiny uses the Anthropic agent. Also check `HA_AGENT_ID` in `.env` (see the next entry).
+
+### `conversation` fails with HTTP 400/404, or the answers sound canned
+
+You see `Home Assistant returned HTTP 400 for /api/conversation/process` (or 404), or the answers are short canned phrases (for example "Sorry, I couldn't understand that") instead of Claude's.
+
+- Cause: `HA_AGENT_ID` in `.env` is wrong or empty. When it is empty, Home Assistant's built-in agent answers, not Claude (the smoke test prints a hint about this).
+- Fix: in Home Assistant go to Settings > Devices & services > Entities, search "conversation", and copy the Anthropic agent's entity ID (for example `conversation.claude_conversation`) into `.env` as `HA_AGENT_ID=`. See the [setup guide](setup-windows.md), section 7.
 
 ### `FAIL multi-turn:` "context was lost"
 
@@ -94,18 +101,19 @@ You see an error from `docker compose up -d` naming port 8123, 10300 or 10200.
 ### Home Assistant is "unable to connect" to the Voice PE
 
 - Cause: the Voice PE's IP address changed (no reservation), it is switched off, or it is on a different Wi-Fi.
-- Fix: check it has power and is on the home Wi-Fi. Find its current IP in your router's device list, then in Home Assistant go to Settings > Devices & services > ESPHome, open the entry and update the host. To stop it happening again, make a DHCP reservation ([Voice PE setup](voice-pe-setup.md), step 3). Home Assistant reaches the device on port `6053`; if it still fails, check that your router is not isolating Wi-Fi devices from the PC (a "guest network" or "AP isolation" setting).
+- Fix: check it has power and is on the home Wi-Fi. Find its current IP in your router's device list, then in Home Assistant go to Settings > Devices & services > ESPHome, open the entry and update the host. To stop it happening again, make a DHCP reservation ([Voice PE setup](voice-pe-setup.md), step 4). Home Assistant reaches the device on port `6053`; if it still fails, check that your router is not isolating Wi-Fi devices from the PC (a "guest network" or "AP isolation" setting).
 
 ### No spoken answer from the Voice PE
 
 The light ring reacts to you, but no answer is spoken.
 
-- Cause: the Voice PE cannot download the audio from Home Assistant on port 8123, usually because Windows Firewall blocks it or the PC's network is set to Public.
-- Fix: add the inbound rule for TCP 8123 on the Private network ([Voice PE setup](voice-pe-setup.md), step 2), and make sure your home network profile is Private. Confirm the Voice PE and the PC are on the same network.
+- Cause 1 (most common): Home Assistant's local network URL is wrong. In Docker it thinks its address is the container's, so the audio link it gives the Voice PE is unreachable. Fix: set Settings > System > Network > Home Assistant URL > Local network to `http://<your PC's IPv4>:8123` ([Voice PE setup](voice-pe-setup.md), step 1).
+- Cause 2: Windows Firewall blocks port 8123, or the PC's network is set to Public. Fix: add the inbound rule for TCP 8123 on the Private network ([Voice PE setup](voice-pe-setup.md), step 2), and make sure your home network profile is Private.
+- Also confirm the Voice PE and the PC are on the same network, and that the PC's IP address has not changed (use a DHCP reservation).
 
 ### The wake word never triggers
 
-- Check the Voice PE is set to the `Destiny` assistant with a wake word ([Voice PE setup](voice-pe-setup.md), step 5), its mute switch is off, and you are within a couple of metres. Try "Okay Nabu" if "Hey Jarvis" is unreliable.
+- Check the Voice PE is set to the `Destiny` assistant with a wake word ([Voice PE setup](voice-pe-setup.md), step 6), its mute switch is off, and you are within a couple of metres. Try "Okay Nabu" if "Hey Jarvis" is unreliable.
 
 ## Answer problems
 

@@ -45,12 +45,13 @@ class _Ctx(object):
 
 class SmokeTests(unittest.TestCase):
     def test_all_pass_returns_zero(self):
-        path = os.path.join(tempfile.mkdtemp(), "e")
-        with open(path, "w") as f:
-            f.write("HA_TOKEN=tok\n")
         buf = io.StringIO()
-        with _Ctx(), redirect_stdout(buf):
-            code = smoke_test.main(["--env", path])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "e")
+            with open(path, "w") as f:
+                f.write("HA_TOKEN=tok\n")
+            with _Ctx(), redirect_stdout(buf):
+                code = smoke_test.main(["--env", path])
         self.assertEqual(code, 0)
         out = buf.getvalue()
         self.assertIn("6/6 checks passed", out)
@@ -95,6 +96,27 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(calls[1][1].get("conversation_id"), "cid1")
         self.assertIsNone(calls[0][1].get("agent_id"))
 
+    def test_agent_id_reaches_both_calls(self):
+        with _Ctx() as m:
+            res = smoke_test.run_checks(dict(ENV, HA_AGENT_ID="conversation.claude"))
+        calls = m[3].call_args_list
+        self.assertEqual(len(calls), 2)
+        for c in calls:
+            self.assertEqual(c[1].get("agent_id"), "conversation.claude")
+        for _, _, detail in res:
+            self.assertNotIn("HA_AGENT_ID is empty", detail)
+
+    def test_empty_agent_id_adds_hint(self):
+        with _Ctx():
+            res = smoke_test.run_checks(ENV)
+        d = {n: det for n, _, det in res}
+        self.assertIn("HA_AGENT_ID is empty", d["conversation"])
+        with _Ctx(converse=mock.Mock(side_effect=HAError("boom"))):
+            res = smoke_test.run_checks(ENV)
+        d = {n: det for n, _, det in res}
+        self.assertIn("boom", d["conversation"])
+        self.assertIn("HA_AGENT_ID is empty", d["conversation"])
+
     def test_multi_turn_fails_without_saturday(self):
         conv = mock.Mock(side_effect=[("Sunny.", "c"), ("What do you mean?", "c")])
         with _Ctx(converse=conv):
@@ -127,8 +149,9 @@ class SmokeTests(unittest.TestCase):
 
     def test_missing_env_file_hint(self):
         buf = io.StringIO()
-        with _Ctx(), redirect_stdout(buf):
-            smoke_test.main(["--env", os.path.join(tempfile.mkdtemp(), "nope")])
+        with tempfile.TemporaryDirectory() as d:
+            with _Ctx(), redirect_stdout(buf):
+                smoke_test.main(["--env", os.path.join(d, "nope")])
         self.assertIn("copy .env.example .env", buf.getvalue())
 
 

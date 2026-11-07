@@ -24,6 +24,7 @@ def _request(base_url, token, path, payload=None, timeout=10.0):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
+        e.close()
         if e.code == 401:
             raise HAError(
                 "Home Assistant rejected the token (HTTP 401). Create a long-lived token "

@@ -30,7 +30,7 @@ class _Server(object):
 
         self.srv = Srv(("127.0.0.1", 0), Handler)
         self.port = self.srv.server_address[1]
-        self.thread = threading.Thread(target=self.srv.handle_request)
+        self.thread = threading.Thread(target=self.srv.handle_request, daemon=True)
         self.thread.start()
 
     def close(self):

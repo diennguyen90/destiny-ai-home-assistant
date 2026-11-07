@@ -53,13 +53,13 @@ Home Assistant runs in Docker, so it reaches the other containers by service nam
 You are Destiny, a friendly family assistant living in our home. Answer in one to three short sentences, written the way you would say them out loud: no lists, no markdown, no emoji. If someone asks, say you are an AI. If you do not know something, say so briefly.
 ```
 
-4. Turn on "Control Home Assistant" (Assist API) and turn on "Prefer handling commands locally". Save.
+4. Turn on "Control Home Assistant" (Assist API). Save.
 
 **Pipeline**
 
 1. Go to Settings > Voice assistants > Add assistant.
 2. Name: `Destiny`. Language: English.
-3. Conversation agent: the Anthropic agent. Speech-to-text: faster-whisper. Text-to-speech: piper (voice `en_GB-alba-medium`). Leave wake word empty for now. Create.
+3. Conversation agent: the Anthropic agent. Turn on "Prefer handling commands locally" (a toggle in this dialog; wording may vary by version). Speech-to-text: faster-whisper. Text-to-speech: piper (voice `en_GB-alba-medium`). Leave wake word empty for now. Create.
 4. Optionally mark it as the preferred assistant (the star / three-dot menu).
 
 **Expose only the weather entity**
@@ -77,13 +77,14 @@ Click the assist icon (top right of the dashboard), choose the Destiny pipeline,
 1. In Home Assistant, click your name at the bottom left to open your Profile, then the Security tab.
 2. Scroll to "Long-lived access tokens", click Create token, name it `destiny-smoke-test`, and copy the token shown (it is shown only once).
 3. Open `.env` in Notepad and paste it after `HA_TOKEN=` (no quotes, no spaces). Save. `.env` is git-ignored.
-4. The smoke test needs Python 3.8 or newer. Check with `python --version`; if it is missing, install Python from https://www.python.org/.
-5. Run the smoke test: `python scripts/smoke_test.py`.
-6. You should see each check pass: Whisper and Piper respond, Home Assistant responds, a question gets an answer, the follow-up "What about Saturday?" refers to Saturday, and Piper returns audio.
+4. Find the Anthropic agent's entity ID, so the smoke test talks to Claude and not Home Assistant's built-in agent: Settings > Devices & services > Entities, search "conversation", and copy the entity ID of the Anthropic agent (it looks like `conversation.claude_conversation`; the UI wording may vary by version). In `.env`, put it after `HA_AGENT_ID=`, next to `HA_TOKEN`. Save.
+5. The smoke test needs Python 3.8 or newer. Check with `python --version`; if it is missing, install Python from https://www.python.org/.
+6. Run the smoke test: `python scripts/smoke_test.py`.
+7. You should see each check pass, in this order: `whisper`, `piper`, `piper-audio` (Piper returns audio), `ha-api`, `conversation` (a question gets an answer) and `multi-turn` (the follow-up "What about Saturday?" refers to Saturday).
 
 ## 8. Windows Firewall for the Voice PE
 
-The Voice PE (your voice device) downloads spoken answers from Home Assistant on port 8123, so Windows Firewall must allow inbound TCP 8123 on your Private network. The steps are in [Voice PE setup](voice-pe-setup.md), step 2. Then continue with that guide to connect the device.
+The Voice PE (your voice device) downloads spoken answers from Home Assistant on port 8123, so Windows Firewall must allow inbound TCP 8123 on your Private network. The Voice PE guide starts by setting Home Assistant's local URL to your PC's address, then covers the firewall rule ([Voice PE setup](voice-pe-setup.md), steps 1 and 2) before connecting the device with the phone app. Follow that guide from the top. Your phone must always use `http://<PC-IP>:8123`, never `localhost`.
 
 ## Troubleshooting
 
