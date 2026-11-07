@@ -18,7 +18,8 @@ custom "brain" service arrives in Phase 2.
 |---|---|---|
 | Voice pipeline | Home Assistant **Assist** | Already chains wake word → STT → agent → TTS, handles conversation IDs and follow-ups |
 | Voice endpoint | **Home Assistant Voice Preview Edition** (purchased) | On-device wake word, echo cancellation, mute switch, finished case |
-| Wake word | Stock on-device **"Hey Jarvis"** (or "Okay Nabu") | "Hey House" needs custom model training — deferred to its own task |
+| Assistant name | **Destiny** | She introduces herself as Destiny; the system prompt and pipeline use this name |
+| Wake word | Stock on-device **"Hey Jarvis"** (or "Okay Nabu") for now | **"Hey Destiny"** needs custom model training — its own task after Phase 1 |
 | Speech-to-text | **faster-whisper** via Wyoming, running locally | Private, free; this PC (Ryzen 7 5700X, 48 GB) runs it fast |
 | Text-to-speech | **Piper** via Wyoming, running locally | Free, private, good enough to prove the loop; voice is a swappable setting |
 | AI agent | Home Assistant's built-in **Anthropic** conversation integration | Zero custom code for Phase 1; replaced by our brain in Phase 2 |
@@ -61,7 +62,9 @@ fixed IP (DHCP reservation on the router) so this doesn't break.
    UI. The key is stored by Home Assistant, never in this repo.
 6. Create an Assist pipeline "Destiny": faster-whisper → Anthropic → Piper.
    Agent settings: model choice (your call — Haiku 5.5 is fastest/cheapest),
-   a short household system prompt, "prefer handling commands locally" on.
+   a short household system prompt (she is "Destiny", a friendly family
+   assistant, answers in 1–3 spoken-style sentences, and says she's an AI if
+   asked), "prefer handling commands locally" on.
    Home Assistant control (Assist API) is on, but **only the weather entity is
    exposed** (Met.no, free, created during onboarding) — so Claude can answer
    weather questions but can't touch any device. Device exposure is widened
@@ -129,7 +132,7 @@ Nothing is reported as working until these have actually run.
 ## 9. Out of scope for Phase 1
 
 Custom brain service, profiles, child mode, memory, dashboard, device control,
-shopping/reminders/calendar, music, "Hey House" wake word, multi-room.
+shopping/reminders/calendar, music, custom "Hey Destiny" wake word, multi-room.
 Each comes in its own later phase with its own spec.
 
 ## 10. Risks
