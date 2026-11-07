@@ -15,7 +15,7 @@ Follow these steps in order. Each step says what you should see when it worked. 
 2. Optional: open `.env` in Notepad and set `TZ` to your timezone (for example `America/New_York`). Leave everything else as is.
 3. Start everything: `docker compose up -d`
 4. Check: `docker compose ps`
-5. You should see three services, `homeassistant`, `whisper` and `piper`, all with status `Up`. The first start downloads images and the speech model/voice, so give it a few minutes. To watch progress: `docker compose logs whisper piper --tail 20` should end with a line saying `Ready` for each.
+5. You should see three services, `homeassistant`, `whisper` and `piper`, all with status `Up`. The first start downloads images and the speech model/voice, so give it a few minutes. To watch progress: `docker compose logs whisper piper --tail 20` should eventually show that each service is ready or listening (the exact wording varies by version).
 
 ## 3. Home Assistant onboarding
 
@@ -77,10 +77,17 @@ Click the assist icon (top right of the dashboard), choose the Destiny pipeline,
 1. In Home Assistant, click your name at the bottom left to open your Profile, then the Security tab.
 2. Scroll to "Long-lived access tokens", click Create token, name it `destiny-smoke-test`, and copy the token shown (it is shown only once).
 3. Open `.env` in Notepad and paste it after `HA_TOKEN=` (no quotes, no spaces). Save. `.env` is git-ignored.
-4. Run the smoke test: `python scripts/smoke_test.py` (the script is added in a later task of Phase 1).
-5. You should see each check pass: Whisper and Piper respond, Home Assistant responds, a question gets an answer, the follow-up "What about Saturday?" refers to Saturday, and Piper returns audio.
+4. The smoke test needs Python 3.8 or newer. Check with `python --version`; if it is missing, install Python from https://www.python.org/.
+5. Run the smoke test: `python scripts/smoke_test.py`.
+6. You should see each check pass: Whisper and Piper respond, Home Assistant responds, a question gets an answer, the follow-up "What about Saturday?" refers to Saturday, and Piper returns audio.
+
+## 8. Windows Firewall for the Voice PE
+
+The Voice PE (your voice device) downloads spoken answers from Home Assistant on port 8123, so Windows Firewall must allow inbound TCP 8123 on your Private network. The steps are in [Voice PE setup](voice-pe-setup.md), step 2. Then continue with that guide to connect the device.
 
 ## Troubleshooting
+
+See [troubleshooting.md](troubleshooting.md) for symptoms and fixes. Quick commands:
 
 - Check status: `docker compose ps`; logs: `docker compose logs <service> --tail 50` (services: `homeassistant`, `whisper`, `piper`).
 - Restart a service: `docker compose restart whisper`.

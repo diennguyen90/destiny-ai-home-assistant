@@ -17,6 +17,8 @@ Then open http://localhost:8123 and follow the setup guide to finish configurati
 ## Docs
 
 - [Windows setup guide](docs/setup-windows.md)
+- [Voice PE setup](docs/voice-pe-setup.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [Phase 1 design spec](docs/superpowers/specs/2026-11-07-phase1-voice-prototype-design.md)
 
 Secrets (`.env`, `data/`, Home Assistant's config) are git-ignored. Your Anthropic API key is entered only in Home Assistant's web UI.
