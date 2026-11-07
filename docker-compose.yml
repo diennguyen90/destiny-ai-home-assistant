@@ -1,0 +1,33 @@
+# Destiny Phase 1: Home Assistant + local Whisper (STT) + local Piper (TTS).
+# Host networking is not used (unsupported on Docker Desktop); ports are published instead.
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:${HA_IMAGE_TAG}
+    container_name: destiny-homeassistant
+    volumes:
+      - ./ha/config:/config
+    environment:
+      TZ: ${TZ}
+    ports:
+      - "8123:8123"
+    restart: unless-stopped
+
+  whisper:
+    image: rhasspy/wyoming-whisper:${WHISPER_IMAGE_TAG}
+    container_name: destiny-whisper
+    command: --model ${WHISPER_MODEL} --language en
+    volumes:
+      - ./data/whisper:/data
+    ports:
+      - "10300:10300"
+    restart: unless-stopped
+
+  piper:
+    image: rhasspy/wyoming-piper:${PIPER_IMAGE_TAG}
+    container_name: destiny-piper
+    command: --voice ${PIPER_VOICE}
+    volumes:
+      - ./data/piper:/data
+    ports:
+      - "10200:10200"
+    restart: unless-stopped

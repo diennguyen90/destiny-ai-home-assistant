@@ -1,0 +1,7 @@
+.env
+data/
+ha/config/*
+!ha/config/.gitkeep
+.superpowers/
+__pycache__/
+*.pyc
