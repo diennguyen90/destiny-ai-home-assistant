@@ -1,7 +1,7 @@
 # Destiny — Phase 1: Working Voice Prototype (Design Spec)
 
 Date: 2026-11-07
-Status: Draft — awaiting review
+Status: Implemented — Phase 1 verified live 2026-11-17
 
 ## 1. Goal
 
@@ -19,7 +19,7 @@ custom "brain" service arrives in Phase 2.
 | Voice pipeline | Home Assistant **Assist** | Already chains wake word → STT → agent → TTS, handles conversation IDs and follow-ups |
 | Voice endpoint | **Home Assistant Voice Preview Edition** (purchased) | On-device wake word, echo cancellation, mute switch, finished case |
 | Assistant name | **Destiny** | She introduces herself as Destiny; the system prompt and pipeline use this name |
-| Wake word | Stock on-device **"Hey Jarvis"** (or "Okay Nabu") for now | **"Hey Destiny"** needs custom model training — its own task after Phase 1 |
+| Wake word | Stock on-device **"Okay Nabu"** (the device default) or "Hey Jarvis" for now | **"Hey Destiny"** needs custom model training — its own task after Phase 1 |
 | Speech-to-text | **faster-whisper** via Wyoming, running locally | Private, free; this PC (Ryzen 7 5700X, 48 GB) runs it fast |
 | Text-to-speech | **Piper** via Wyoming, running locally | Free, private, good enough to prove the loop; voice is a swappable setting |
 | AI agent | Home Assistant's built-in **Anthropic** conversation integration | Zero custom code for Phase 1; replaced by our brain in Phase 2 |
@@ -61,14 +61,19 @@ fixed IP (DHCP reservation on the router) so this doesn't break.
 5. **You** add the Anthropic integration and paste your API key into Home Assistant's
    UI. The key is stored by Home Assistant, never in this repo.
 6. Create an Assist pipeline "Destiny": faster-whisper → Anthropic → Piper.
-   Agent settings: model choice (your call — Haiku 5.5 is fastest/cheapest),
-   a short household system prompt (she is "Destiny", a friendly family
-   assistant, answers in 1–3 spoken-style sentences, and says she's an AI if
-   asked), "prefer handling commands locally" on.
-   Home Assistant control (Assist API) is on, but **only the weather entity is
-   exposed** (Met.no, free, created during onboarding) — so Claude can answer
-   weather questions but can't touch any device. Device exposure is widened
-   deliberately in Phase 4.
+   Agent settings: model choice (your call — Haiku is fastest/cheapest, a
+   Sonnet model tutors better), a household system prompt (she is "Destiny", a
+   friendly family assistant who speaks in plain sentences, gives 1-2 sentence
+   answers to quick questions and 3-5 sentence chunks for explanations, then
+   asks if they want more; acts as a tutor for learning and homework, using
+   hints rather than answers; uses simple words for children; admits
+   uncertainty; and says she's an AI if asked), "prefer handling commands
+   locally" on.
+   "Device control" is ticked, but **only the weather entity is exposed**
+   (Met.no, free, created during onboarding) — so Claude can answer weather
+   questions but can't touch any device. Phase 1 limit: she sees current
+   conditions only, not forecasts (forecasts and web access come in Phase 2).
+   Device exposure is widened deliberately in Phase 4.
 7. Test by typing and by phone/browser microphone — **works before the Voice PE arrives.**
 8. When the Voice PE arrives: Wi-Fi setup via the HA companion app, reserve its IP,
    add via ESPHome integration, assign the "Destiny" pipeline and wake word,
@@ -109,7 +114,7 @@ Automated (`scripts/smoke_test.py`, reads `HA_URL` and a long-lived token from `
 
 Manual (cannot be automated here):
 6. Phone/browser mic: spoken question → spoken answer.
-7. Voice PE: "Hey Jarvis, …" → spoken answer; follow-up within the conversation window.
+7. Voice PE: "Okay Nabu, …" → spoken answer; follow-up within the conversation window.
 8. Record rough end-to-end latency (target ≤ 4 s; Alexa is ~1 s).
 
 Nothing is reported as working until these have actually run.

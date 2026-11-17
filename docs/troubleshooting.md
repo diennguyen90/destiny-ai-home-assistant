@@ -8,7 +8,12 @@ Find the symptom you see, read the likely cause, and try the fix. Useful command
 
 ## Smoke test problems
 
-The smoke test is `python scripts/smoke_test.py`. It prints one `PASS` or `FAIL` line per check.
+The smoke test is `python scripts\smoke_test.py`, run from `C:\dev\Destiny`. It prints one `PASS` or `FAIL` line per check.
+
+### "No such file" or "can't open file" when running the smoke test
+
+- Cause: you ran it from a different folder.
+- Fix: run `cd C:\dev\Destiny` first, then `python scripts\smoke_test.py`.
 
 ### `FAIL whisper:` or `FAIL piper:` with "Cannot connect"
 
@@ -61,7 +66,7 @@ You see `Home Assistant returned HTTP 400 for /api/conversation/process` (or 404
 
 You see: `answer does not mention Saturday, so context was lost: ...`
 
-- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "Saturday" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (Haiku model chosen, instructions pasted, "Control Home Assistant" on).
+- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "Saturday" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (instructions pasted, "Device control" ticked under AI tools). If Destiny says she cannot see the forecast but still names Saturday, that is fine.
 
 ### The smoke test hangs, or reports a protocol error on whisper or piper
 
@@ -77,6 +82,19 @@ You see the test sit for a long time, or messages like `Connection closed while 
 - Windows line endings, comments, blank lines and quoted values in `.env` are all handled automatically; you do not need to fix them.
 
 ## Docker and startup problems
+
+### Can't connect to localhost:8123
+
+After a PC restart, http://localhost:8123 does not load.
+
+- Cause: Docker Desktop is not running, so Home Assistant is not running either.
+- Fix: start Docker Desktop and wait for "Engine running". Home Assistant comes back by itself in a minute or two. To stop this happening: Docker Desktop > Settings > General > tick "Start Docker Desktop when you sign in to your computer" > Apply.
+
+### I forgot my Home Assistant password
+
+- Your username is shown in Settings > People > Users tab.
+- If you are still signed in on any device or browser, an owner can click the user in that list > Change password.
+- Chrome's password manager may have it saved: search for `localhost` in your saved passwords.
 
 ### Docker Desktop says WSL 2 is not enabled
 
@@ -98,29 +116,47 @@ You see an error from `docker compose up -d` naming port 8123, 10300 or 10200.
 
 ## Voice PE problems
 
-### Home Assistant is "unable to connect" to the Voice PE
+### Wizard stuck on "Say Okay Nabu again"
 
-- Cause: the Voice PE's IP address changed (no reservation), it is switched off, or it is on a different Wi-Fi.
-- Fix: check it has power and is on the home Wi-Fi. Find its current IP in your router's device list, then in Home Assistant go to Settings > Devices & services > ESPHome, open the entry and update the host. To stop it happening again, make a DHCP reservation ([Voice PE setup](voice-pe-setup.md), step 4). Home Assistant reaches the device on port `6053`; if it still fails, check that your router is not isolating Wi-Fi devices from the PC (a "guest network" or "AP isolation" setting).
+The Voice Satellite setup wizard can hang on the confirmation step even when the wake word worked.
+
+- Fix: click "Skip" (top right) and carry on with the wizard ([Voice PE setup](voice-pe-setup.md), step 6). Remember to set the Assistant to "Destiny" on the last screen.
+
+### Home Assistant can't find or reach the Voice PE
+
+- Cause 1 (check first): the PC and the Voice PE are on different networks. A mesh Wi-Fi system (for example Google Nest Wifi) plugged into the internet provider's box creates a second network, so a PC cabled to the provider's box is on `192.168.1.x` while the Voice PE is on `192.168.86.x`. Fix: compare the first three numbers of the PC's `ipconfig` address and your phone's Wi-Fi address; if they differ, plug the PC into the main mesh router instead ([Voice PE setup](voice-pe-setup.md), step 1).
+- Cause 2: the Voice PE's IP address changed (no reservation), it is switched off, or it is on a different Wi-Fi.
+- Fix: check it has power and is on the home Wi-Fi. Find its current IP in your router's device list, then in Home Assistant go to Settings > Devices & services > ESPHome, open the entry and update the host. To stop it happening again, make a DHCP reservation ([Voice PE setup](voice-pe-setup.md), step 5). Home Assistant reaches the device on port `6053`; if it still fails, check that your router is not isolating Wi-Fi devices from the PC (a "guest network" or "AP isolation" setting).
 
 ### No spoken answer from the Voice PE
 
 The light ring reacts to you, but no answer is spoken.
 
-- Cause 1 (most common): Home Assistant's local network URL is wrong. In Docker it thinks its address is the container's, so the audio link it gives the Voice PE is unreachable. Fix: set Settings > System > Network > Home Assistant URL > Local network to `http://<your PC's IPv4>:8123` ([Voice PE setup](voice-pe-setup.md), step 1).
-- Cause 2: Windows Firewall blocks port 8123, or the PC's network is set to Public. Fix: add the inbound rule for TCP 8123 on the Private network ([Voice PE setup](voice-pe-setup.md), step 2), and make sure your home network profile is Private.
+- Cause 1 (most common): Home Assistant's local network URL is wrong. In Docker it thinks its address is the container's, so the audio link it gives the Voice PE is unreachable. Fix: set Settings > System > Network > Home Assistant URL > Local network (with "Automatic" turned off) to `http://<your PC's IPv4>:8123` ([Voice PE setup](voice-pe-setup.md), step 2).
+- Cause 2: Windows Firewall blocks port 8123, or the PC's network is set to Public. Fix: add the inbound rule for TCP 8123 on the Private network ([Voice PE setup](voice-pe-setup.md), step 3), and make sure your home network profile is Private.
 - Also confirm the Voice PE and the PC are on the same network, and that the PC's IP address has not changed (use a DHCP reservation).
 
 ### The wake word never triggers
 
-- Check the Voice PE is set to the `Destiny` assistant with a wake word ([Voice PE setup](voice-pe-setup.md), step 6), its mute switch is off, and you are within a couple of metres. Try "Okay Nabu" if "Hey Jarvis" is unreliable.
+- Check the Voice PE is set to the `Destiny` assistant with a wake word ([Voice PE setup](voice-pe-setup.md), step 6), its mute switch is off, and you are within a couple of metres. "Okay Nabu" is the device default; try it if "Hey Jarvis" is unreliable.
+
+### Answers are too quiet, or the sound is cut off or echoes
+
+- Turn the top ring clockwise for more volume, or use the media player volume on the device page ([Voice PE setup](voice-pe-setup.md), step 7). With an external speaker, keep it about 30 cm (1 ft) from the Voice PE and not aimed at it, and avoid Bluetooth transmitter adapters.
 
 ## Answer problems
 
 ### Claude says "I can't access weather" (or similar)
 
-- Cause: the weather entity is not exposed to the assistant, or the Met.no weather integration is not installed.
-- Fix: go to Settings > Voice assistants > Expose tab and make sure the weather entity (for example `weather.home`) is exposed. If it does not exist, add the "Meteorologisk institutt (Met.no)" integration (setup guide, section 3).
+First decide which of these you are seeing.
+
+- She has no weather at all (cannot tell you the current temperature or sky). Cause: the weather entity is not exposed to the assistant, or the Met.no weather integration is not installed. Fix: go to Settings > Voice assistants > Expose tab and make sure the weather entity ("Home" with a sun icon, id like `weather.forecast_home`) is exposed. If it does not exist, add the "Meteorologisk institutt (Met.no)" integration (setup guide, section 3).
+- She knows the current conditions but says she can't see tomorrow's forecast. This is expected in Phase 1: Destiny sees current conditions (temperature, sky, humidity) but not forecasts. Forecasts and web access come in Phase 2.
+
+### Claude can control devices I did not expect
+
+- Cause: "Expose new entities" is on (it is on by default), so every device you add later is exposed.
+- Fix: Settings > Voice assistants > Assistants tab > turn OFF "Expose new entities", then on the Expose tab remove anything you do not want Destiny to reach.
 
 ### Whisper mishears words
 

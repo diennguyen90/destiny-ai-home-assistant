@@ -8,6 +8,7 @@ Follow these steps in order. Each step says what you should see when it worked. 
 2. Restart if asked, then start Docker Desktop.
 3. You should see: the Docker whale icon in the system tray, and Docker Desktop showing "Engine running" (green) at the bottom left.
 4. Check in PowerShell: `docker --version` prints a version number.
+5. Make Docker start by itself, so Destiny comes back after a PC restart: in Docker Desktop go to Settings > General, tick "Start Docker Desktop when you sign in to your computer", then click Apply. (If Docker Desktop is not running, http://localhost:8123 will not load.)
 
 ## 2. Start the services
 
@@ -23,7 +24,7 @@ Follow these steps in order. Each step says what you should see when it worked. 
 2. You should see "Welcome to Home Assistant". Click "Create my smart home".
 3. Create the owner account (name, username, password). Choose your own password and keep it safe.
 4. Set your home location and country when asked. Opt out of analytics if you prefer.
-5. On the "We found..." screen, if the Meteorologisk institutt (Met.no) weather integration is offered, add it. This gives you the free weather entity (usually `weather.home`). If it is not offered, go to Settings > Devices & services > Add integration > "Meteorologisk institutt (Met.no)" and add it.
+5. On the "We found..." screen, if the Meteorologisk institutt (Met.no) weather integration is offered, add it. This gives you the free weather entity (it shows as "Home"; its id looks like `weather.forecast_home`). If it is not offered, go to Settings > Devices & services > Add integration > "Meteorologisk institutt (Met.no)" and add it.
 6. You should see the Home Assistant dashboard.
 
 ## 4. Add the Whisper and Piper integrations
@@ -39,38 +40,50 @@ Home Assistant runs in Docker, so it reaches the other containers by service nam
 1. Create an API key at https://console.anthropic.com/ (also set a monthly spend limit there; testing costs cents).
 2. In Home Assistant: Settings > Devices & services > Add integration > "Anthropic".
 3. Paste your API key into the box and Submit. The key is stored by Home Assistant only; never put it in this repo or in `.env`.
-4. You should see an Anthropic entry with a conversation agent.
+4. You should see an Anthropic entry. Its conversation agent is listed as "Claude conversation".
 
-## 6. Configure Destiny's agent and pipeline
+## 6. Configure Destiny's agent and assistant
+
+Destiny's main jobs are answering daily questions and helping with learning. Smart-home control is secondary and comes later.
 
 **Agent settings**
 
-1. On the Anthropic integration, click the conversation agent's settings (the gear / "Configure").
-2. Model: choose a Haiku model (fastest and cheapest) to start.
-3. Instructions (system prompt): replace the text with this block:
+1. Go to Settings > Devices & services > Anthropic. Next to "Claude conversation", click the cog to configure it.
+2. Instructions: Home Assistant fills this box with its own default text. Delete it and paste the Destiny prompt below. Paste it as ONE paragraph (do not add line breaks); the editor auto-indents multi-line pastes and makes a mess.
 
 ```
-You are Destiny, a friendly family assistant living in our home. Answer in one to three short sentences, written the way you would say them out loud: no lists, no markdown, no emoji. If someone asks, say you are an AI. If you do not know something, say so briefly.
+You are Destiny, a friendly AI assistant for our family. You are speaking out loud, so speak in natural sentences with no lists, markdown, emojis or symbols. Quick questions get 1-2 sentence answers. For explanations, speak in short chunks of 3-5 sentences, then ask if they want more. When someone is learning or doing homework, be a tutor: don't just give the answer; give a hint or ask a small question and let them try first. If the person sounds like a child, use simple words and everyday examples. If you are unsure or something may be out of date, say so. Always keep it family-friendly. If asked, say you are an AI.
 ```
 
-4. Turn on "Control Home Assistant" (Assist API). Save.
+   Why it ends answers with a question: the Voice PE keeps listening after Destiny asks a question, so you can answer or ask a follow-up without saying the wake word again.
 
-**Pipeline**
+3. AI tools: tick "Device control" (it only reaches entities you expose, see below). Leave "Home Assistant" unticked.
+4. Model: this is your choice.
+   - "Recommended model settings" ticked uses Claude Haiku: fast and cheap, roughly $1-2 a month at about 100 questions a day.
+   - For better tutoring and explanations, untick it and choose a Sonnet model: roughly $20-25 a month at the same usage.
+5. Save (Submit).
 
-1. Go to Settings > Voice assistants > Add assistant.
-2. Name: `Destiny`. Language: English.
-3. Conversation agent: the Anthropic agent. Turn on "Prefer handling commands locally" (a toggle in this dialog; wording may vary by version). Speech-to-text: faster-whisper. Text-to-speech: piper (voice `en_GB-alba-medium`). Leave wake word empty for now. Create.
-4. Optionally mark it as the preferred assistant (the star / three-dot menu).
+**Create the Destiny assistant**
+
+1. Go to Settings > Voice assistants > Assistants tab > "Add assistant".
+2. Name: `Destiny`.
+3. Conversation agent: "Claude conversation". Leave "Prefer handling commands locally" on (it handles timers, the time and the shopping list quickly and for free).
+4. Speech-to-text: faster-whisper.
+5. Text-to-speech: piper. Language `en_GB`, Voice "cori (high)" (more natural than alba). Piper downloads the voice automatically the first time it is used, which needs internet and takes a few seconds. "Try voice" plays a sample.
+6. Click Create.
+7. On Destiny's row, open the three-dot menu (⋮) > "Set as preferred". Destiny now has a star.
 
 **Expose only the weather entity**
 
-1. Go to Settings > Voice assistants > Expose tab.
-2. Make sure the weather entity (for example `weather.home`) is exposed. Remove any other exposed entities; click "Expose entities" to add the weather one if it is missing.
-3. You should see exactly one exposed entity: the weather. Claude can then answer weather questions but cannot control any device. (Widening this is a deliberate later step.)
+1. Still in Settings > Voice assistants, on the Assistants tab, turn OFF "Expose new entities". It is on by default and would give Claude every device you add later.
+2. Open the Expose tab > "Expose entities" and search "weather". The entity shows as "Home" with a sun icon (its id looks like `weather.forecast_home`). Tick it and click Expose.
+3. Remove any other exposed entities. You should see exactly one exposed entity: the weather. Claude can then answer weather questions but cannot control any device. (Widening this is a deliberate later step.)
+
+**Known Phase 1 limit: no forecasts.** Destiny sees current conditions (temperature, sky, humidity) but not forecasts. If you ask about tomorrow she will say she can't see the forecast. Forecasts and web access come in Phase 2.
 
 **Quick test**
 
-Click the assist icon (top right of the dashboard), choose the Destiny pipeline, and type "What is the weather tomorrow?" then "What about Saturday?". You should get short spoken-style answers that mention the weather, and the second answer should refer to Saturday. The microphone button lets you test by voice from your browser (allow microphone access).
+Click the assist icon (top right of the dashboard), choose the Destiny assistant, and type "What is the weather like right now?" You should get a short spoken-style answer with the current conditions. Then ask a follow-up such as "Is that warm or cold?" and check it understands what you mean. The microphone button lets you test by voice from your browser (allow microphone access).
 
 ## 7. Create a token and run the smoke test
 
@@ -79,12 +92,13 @@ Click the assist icon (top right of the dashboard), choose the Destiny pipeline,
 3. Open `.env` in Notepad and paste it after `HA_TOKEN=` (no quotes, no spaces). Save. `.env` is git-ignored.
 4. Find the Anthropic agent's entity ID, so the smoke test talks to Claude and not Home Assistant's built-in agent: Settings > Devices & services > Entities, search "conversation", and copy the entity ID of the Anthropic agent (it looks like `conversation.claude_conversation`; the UI wording may vary by version). In `.env`, put it after `HA_AGENT_ID=`, next to `HA_TOKEN`. Save.
 5. The smoke test needs Python 3.8 or newer. Check with `python --version`; if it is missing, install Python from https://www.python.org/.
-6. Run the smoke test: `python scripts/smoke_test.py`.
-7. You should see each check pass, in this order: `whisper`, `piper`, `piper-audio` (Piper returns audio), `ha-api`, `conversation` (a question gets an answer) and `multi-turn` (the follow-up "What about Saturday?" refers to Saturday).
+6. Go to the project folder first: `cd C:\dev\Destiny`. Running the script from another folder gives a "No such file" error.
+7. Run the smoke test: `python scripts\smoke_test.py`.
+8. You should see each check pass, in this order: `whisper`, `piper`, `piper-audio` (Piper returns audio), `ha-api`, `conversation` (a question gets an answer) and `multi-turn` (the follow-up "What about Saturday?" refers to Saturday; Destiny may say she can't see the forecast, which is fine as long as her answer mentions Saturday).
 
 ## 8. Windows Firewall for the Voice PE
 
-The Voice PE (your voice device) downloads spoken answers from Home Assistant on port 8123, so Windows Firewall must allow inbound TCP 8123 on your Private network. The Voice PE guide starts by setting Home Assistant's local URL to your PC's address, then covers the firewall rule ([Voice PE setup](voice-pe-setup.md), steps 1 and 2) before connecting the device with the phone app. Follow that guide from the top. Your phone must always use `http://<PC-IP>:8123`, never `localhost`.
+The Voice PE (your voice device) downloads spoken answers from Home Assistant on port 8123, so Windows Firewall must allow inbound TCP 8123 on your Private network. The Voice PE guide starts by setting Home Assistant's local URL to your PC's address, then covers the firewall rule ([Voice PE setup](voice-pe-setup.md), steps 2 and 3) before connecting the device with the phone app. Follow that guide from the top, starting with the check that the PC and the Voice PE are on the same network. Your phone must always use `http://<PC-IP>:8123`, never `localhost`.
 
 ## Troubleshooting
 
