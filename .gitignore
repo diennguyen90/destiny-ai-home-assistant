@@ -5,3 +5,6 @@ ha/config/*
 .superpowers/
 __pycache__/
 *.pyc
+
+# Obsidian (if docs/ is opened as a vault)
+.obsidian/
