@@ -113,7 +113,7 @@ def run_checks(env):
                                   agent_id=agent)
         if not speech.strip():
             raise HAError("Home Assistant gave an empty answer")
-        if any(p in speech.lower() for p in WEATHER_UNAVAILABLE):
+        if any(p in speech.lower().replace("’", "'") for p in WEATHER_UNAVAILABLE):
             raise HAError("answer says weather is unavailable: %s" % speech)
         state["cid"] = cid
         return "answer: %s" % speech
@@ -127,10 +127,10 @@ def run_checks(env):
         return results
 
     def multi():
-        speech, _ = ha_converse(base, token, "And how humid is it?",
+        speech, _ = ha_converse(base, token, "What did I just ask you about?",
                                 conversation_id=state.get("cid"), agent_id=agent)
-        if "humid" not in speech.lower():
-            raise HAError("answer does not mention humidity, so context was lost: %s" % speech)
+        if "weather" not in speech.lower():
+            raise HAError("answer does not mention the weather, so context was lost: %s" % speech)
         return "answer: %s" % speech
     record("multi-turn", multi)
     return results

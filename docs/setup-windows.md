@@ -94,7 +94,7 @@ Click the assist icon (top right of the dashboard), choose the Destiny assistant
 5. The smoke test needs Python 3.8 or newer. Check with `python --version`; if it is missing, install Python from https://www.python.org/.
 6. Go to the project folder first: `cd C:\dev\Destiny`. Running the script from another folder gives a "No such file" error.
 7. Run the smoke test: `python scripts\smoke_test.py`.
-8. You should see each check pass, in this order: `whisper`, `piper`, `piper-audio` (Piper returns audio), `ha-api`, `conversation` (a question gets an answer) and `multi-turn` (the question is about the weather right now, and the follow-up "And how humid is it?" must mention humidity). With the Phase 2 brain set up (section 9) there is also a `brain` check after `piper-audio`.
+8. You should see each check pass, in this order: `whisper`, `piper`, `piper-audio` (Piper returns audio), `ha-api`, `conversation` (a question gets an answer) and `multi-turn` (the question is about the weather right now, and the follow-up "What did I just ask you about?" must mention the weather, which only works if the conversation history was kept). With the Phase 2 brain set up (section 9) there is also a `brain` check after `piper-audio`.
 
 ## 8. Windows Firewall for the Voice PE
 
@@ -119,7 +119,7 @@ The brain is a small service (port 8000) that sits between Home Assistant and Cl
 3. Windows Firewall: allow inbound TCP 8000 on the Private profile only, the same way as the 8123 rule in [Voice PE setup](voice-pe-setup.md), step 3. In an administrator PowerShell: `New-NetFirewallRule -DisplayName "Destiny brain 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private`. This is only needed to open the parent page from your phone or another computer.
 4. Restart Home Assistant (`docker compose restart homeassistant`), then go to Settings > Devices & services > Add integration, search "Destiny", and enter the brain URL `http://brain:8000` and the shared key (the value of `BRAIN_SHARED_KEY` in `.env`). Submit.
 5. Go to Settings > Voice assistants > Destiny and set Conversation agent to "Destiny brain". Save.
-6. Run the smoke test as in section 7 (`python scripts\smoke_test.py`). You should now see seven checks pass, in this order: `whisper`, `piper`, `piper-audio`, `brain`, `ha-api`, `conversation` and `multi-turn`. The `conversation` check asks about the weather right now and fails if Destiny says she can't see it; the `multi-turn` follow-up "And how humid is it?" must mention humidity.
+6. Run the smoke test as in section 7 (`python scripts\smoke_test.py`). You should now see seven checks pass, in this order: `whisper`, `piper`, `piper-audio`, `brain`, `ha-api`, `conversation` and `multi-turn`. The `conversation` check asks about the weather right now and fails if Destiny says she can't see it; the `multi-turn` follow-up "What did I just ask you about?" must mention the weather, which only works if the conversation history was kept.
 7. Open the parent page at `http://<PC IPv4>:8000/parent` (your PC's address from `ipconfig`; from your phone, use the same address) and enter the PIN you set as `DESTINY_PARENT_PIN`. It shows today's spend and the cost of recent conversations.
 
 **Rollback:** if the brain misbehaves, go to Settings > Voice assistants > Destiny and set Conversation agent back to "Claude conversation". Nothing else needs to change.
@@ -130,7 +130,7 @@ The brain is a small service (port 8000) that sits between Home Assistant and Cl
 
 See [troubleshooting.md](troubleshooting.md) for symptoms and fixes. Quick commands:
 
-- Check status: `docker compose ps`; logs: `docker compose logs <service> --tail 50` (services: `homeassistant`, `whisper`, `piper`).
+- Check status: `docker compose ps`; logs: `docker compose logs <service> --tail 50` (services: `homeassistant`, `whisper`, `piper`, `brain`).
 - Restart a service: `docker compose restart whisper`.
 - Whisper mishears: set `WHISPER_MODEL=medium-int8` in `.env`, then `docker compose up -d`.
 - Stop everything: `docker compose down` (your Home Assistant data in `ha/config` is kept).

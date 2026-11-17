@@ -26,7 +26,7 @@ def _patches(describe=_describe, synth=None, ping=None, converse=None, brain=Non
         mock.patch.object(smoke_test, "piper_synthesize", side_effect=synth or (lambda *a, **k: 1234)),
         mock.patch.object(smoke_test, "ha_ping", side_effect=ping or (lambda *a, **k: "API running.")),
         mock.patch.object(smoke_test, "ha_converse", side_effect=converse or mock.Mock(
-            side_effect=[("It is sunny and 20 degrees.", "cid1"), ("Humidity is 40 percent, not humid.", "cid1")])),
+            side_effect=[("It is sunny and 20 degrees.", "cid1"), ("You asked about the weather.", "cid1")])),
         mock.patch.object(smoke_test, "brain_health", side_effect=brain or (lambda *a, **k: '{"status":"ok"}')),
     ]
 
@@ -95,7 +95,7 @@ class SmokeTests(unittest.TestCase):
         calls = m[3].call_args_list
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0][0][2], "What's the weather like at home right now?")
-        self.assertEqual(calls[1][0][2], "And how humid is it?")
+        self.assertEqual(calls[1][0][2], "What did I just ask you about?")
         self.assertEqual(calls[1][1].get("conversation_id"), "cid1")
         self.assertIsNone(calls[0][1].get("agent_id"))
 
@@ -120,7 +120,7 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("boom", d["conversation"])
         self.assertIn("HA_AGENT_ID is empty", d["conversation"])
 
-    def test_multi_turn_fails_without_humid(self):
+    def test_multi_turn_fails_without_weather(self):
         conv = mock.Mock(side_effect=[("Sunny.", "c"), ("What do you mean?", "c")])
         with _Ctx(converse=conv):
             res = smoke_test.run_checks(ENV)
@@ -156,6 +156,13 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("answer says weather is unavailable: I don't have access to weather data.",
                       d["conversation"][1])
         self.assertEqual(d["multi-turn"], (False, "skipped: conversation check failed"))
+
+    def test_curly_apostrophe_weather_unavailable_detected(self):
+        conv = mock.Mock(side_effect=[("I don’t have access to weather data.", "c")])
+        with _Ctx(converse=conv):
+            res = smoke_test.run_checks(ENV)
+        d = {n: ok for n, ok, _ in res}
+        self.assertFalse(d["conversation"])
 
     def test_conversation_failure_skips_multi_turn(self):
         conv = mock.Mock(side_effect=HAError("boom"))

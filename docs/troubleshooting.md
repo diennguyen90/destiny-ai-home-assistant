@@ -64,9 +64,9 @@ You see `Home Assistant returned HTTP 400 for /api/conversation/process` (or 404
 
 ### `FAIL multi-turn:` "context was lost"
 
-You see: `answer does not mention humidity, so context was lost: ...` (the follow-up is "And how humid is it?").
+You see: `answer does not mention the weather, so context was lost: ...` (the follow-up is "What did I just ask you about?").
 
-- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "humid" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (instructions pasted, "Device control" ticked under AI tools). The follow-up is about current humidity, so the weather entity must be exposed.
+- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "weather" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (instructions pasted, "Device control" ticked under AI tools). The follow-up asks what the first question was about, so it only passes if the conversation history was kept.
 
 ### The smoke test hangs, or reports a protocol error on whisper or piper
 
