@@ -97,7 +97,8 @@ def test_escalation_runs_sonnet_and_logs_two_records(env):
     e.handle(req("and then", cid))
     assert p.calls[2]["model"] == "claude-sonnet-5-5"
     assert p.calls[2]["messages"][0] == {"role": "user", "content": "what is a black hole"}
-    assert p.calls[2]["messages"][1] == {"role": "assistant",
+    assert p.calls[2]["messages"][1]["role"] == "system"
+    assert p.calls[2]["messages"][2] == {"role": "assistant",
                                          "content": [{"type": "text", "text": "Deep answer."}]}
 
 
@@ -108,21 +109,39 @@ def test_followup_keeps_history(env):
     e.handle(req("another", cid))
     msgs = p.calls[1]["messages"]
     assert msgs[0] == {"role": "user", "content": "favorite color"}
-    assert msgs[1] == {"role": "assistant", "content": first.content}
-    assert msgs[2] == {"role": "user", "content": "another"}
+    assert msgs[1]["role"] == "system"
+    assert msgs[2] == {"role": "assistant", "content": first.content}
+    assert msgs[3] == {"role": "user", "content": "another"}
+    assert msgs[4]["role"] == "system"
 
 
-def test_unknown_conversation_id_gets_new_and_isolated(env):
+def test_unknown_id_is_adopted_and_isolated(env):
     e, p, *_ = build(env)
-    a = e.handle(req("secret apple")).conversation_id
-    b = e.handle(req("hello b")).conversation_id
-    assert a != b
-    e.handle(req("more a", a))
+    e.handle(req("secret apple", "A"))
+    e.handle(req("hello b", "B"))
+    e.handle(req("more a", "A"))
     assert all("hello b" not in json.dumps(m) for m in p.calls[2]["messages"])
     assert any("secret apple" in json.dumps(m) for m in p.calls[2]["messages"])
-    r = e.handle(req("who am i", "unknown-id"))
-    assert r.conversation_id != "unknown-id"
-    assert len(p.calls[3]["messages"]) == 1
+    r = e.handle(req("who am i", "abc"))
+    assert r.conversation_id == "abc"
+    assert [m["role"] for m in p.calls[3]["messages"]] == ["user", "system"]
+
+
+def test_missing_or_oversized_id_generates_uuid(env):
+    e, *_ = build(env)
+    assert len(e.handle(req("hi")).conversation_id) == 32
+    assert len(e.handle(req("hi", "")).conversation_id) == 32
+    long_id = "x" * 129
+    assert e.handle(req("hi", long_id)).conversation_id != long_id
+    assert e.handle(req("hi", "y" * 128)).conversation_id == "y" * 128
+
+
+def test_same_caller_id_twice_keeps_history(env):
+    e, p, *_ = build(env)
+    e.handle(req("first thing", "01JHAULID"))
+    r = e.handle(req("second thing", "01JHAULID"))
+    assert r.conversation_id == "01JHAULID"
+    assert any("first thing" in json.dumps(m) for m in p.calls[1]["messages"])
 
 
 def test_history_expires_after_10_min(env):
@@ -130,11 +149,11 @@ def test_history_expires_after_10_min(env):
     cid = e.handle(req("one")).conversation_id
     clock.now += timedelta(minutes=9)
     assert e.handle(req("two", cid)).conversation_id == cid
-    assert len(p.calls[1]["messages"]) == 3
+    assert len(p.calls[1]["messages"]) == 5
     clock.now += timedelta(minutes=11)
     r = e.handle(req("three", cid))
-    assert r.conversation_id != cid
-    assert len(p.calls[2]["messages"]) == 1
+    assert r.conversation_id == cid
+    assert len(p.calls[2]["messages"]) == 2
 
 
 def test_history_capped_at_20_messages(env):
@@ -142,7 +161,10 @@ def test_history_capped_at_20_messages(env):
     cid = e.handle(req("m0")).conversation_id
     for i in range(1, 15):
         e.handle(req(f"m{i}", cid))
-    assert len(p.calls[-1]["messages"]) <= 21
+    msgs = p.calls[-1]["messages"]
+    assert len(msgs) <= 22
+    assert msgs[0]["role"] == "user"
+    assert msgs[-2]["role"] == "user" and msgs[-1]["role"] == "system"
 
 
 def test_hard_cap_blocks(env):
@@ -186,7 +208,8 @@ def test_provider_error_returns_line_and_logs_error(env):
     assert store.recent()[0].outcome == "error"
     r3 = e.handle(req("again", cid))
     assert r3.speech == "ok"
-    assert p.calls[2]["messages"] == [{"role": "user", "content": "again"}]
+    assert p.calls[2]["messages"][0] == {"role": "user", "content": "again"}
+    assert len(p.calls[2]["messages"]) == 2
 
 
 def test_refusal_line(env):
@@ -195,15 +218,76 @@ def test_refusal_line(env):
     assert store.recent()[0].outcome == "refusal"
 
 
-def test_context_has_weather_and_local_time(env):
+def test_system_is_frozen_base_only(env):
     e, p, *_ = build(env)
     e.handle(req("hi"))
-    system = p.calls[0]["system"]
-    assert system[0] == {"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}}
-    assert "cache_control" not in system[1]
-    assert "Home weather now: sunny, 69°F, humidity 26%." in system[1]["text"]
-    assert "November 17, 2026" in system[1]["text"]
-    assert "2:30 PM" in system[1]["text"]  # 22:30 UTC is 14:30 in Los Angeles
+    assert p.calls[0]["system"] == [
+        {"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}}]
+
+
+def test_context_sent_as_system_message_after_user(env):
+    e, p, *_ = build(env)
+    e.handle(req("hi"))
+    msgs = p.calls[0]["messages"]
+    assert msgs[-2] == {"role": "user", "content": "hi"}
+    assert msgs[-1]["role"] == "system"
+    ctx = msgs[-1]["content"]
+    assert "Home weather now: sunny, 69°F, humidity 26%." in ctx
+    assert "November 17, 2026" in ctx
+    assert "2:30 PM" in ctx  # 22:30 UTC is 14:30 in Los Angeles
+
+
+def test_history_replays_thinking_block_unchanged(env):
+    turn1 = make_result("Blue.")
+    turn1.content = [{"type": "thinking", "thinking": "", "signature": "sig"},
+                     {"type": "text", "text": "Blue."}]
+    e, p, _, _, clock = build(env, turn1, make_result("Red."))
+    cid = e.handle(req("favorite color", "C1")).conversation_id
+    clock.now += timedelta(minutes=2)
+    e.handle(req("another", cid))
+    m1, m2 = p.calls[0]["messages"], p.calls[1]["messages"]
+    assert m2[2]["content"] == turn1.content
+    assert json.dumps(m2[2]["content"]) == json.dumps(turn1.content)
+    assert m2[1] == m1[1]
+    assert p.calls[0]["system"] == p.calls[1]["system"]
+
+
+def test_empty_model_text_returns_error_line(env):
+    e, p, store, *_ = build(env, make_result("  "), make_result("ok"))
+    r = e.handle(req("hello", "E1"))
+    assert r.speech == ERROR
+    rec = store.recent()[0]
+    assert rec.outcome == "error" and rec.route_reason == "default:empty_text"
+    e.handle(req("again", "E1"))
+    assert [m["role"] for m in p.calls[1]["messages"]] == ["user", "system"]
+
+
+def test_deadline_passes_timeout_and_skips_spent_tier2(env):
+    esc = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    e, p, store, _, clock = build(env, esc, make_result("never"))
+    orig = p.complete
+
+    def slow(**kw):
+        r = orig(**kw)
+        clock.now += timedelta(seconds=13)
+        return r
+
+    p.complete = slow
+    r = e.handle(req("what is a black hole"))
+    assert r.speech == ERROR
+    assert len(p.calls) == 1 and p.calls[0]["timeout"] == pytest.approx(13.5)
+    assert store.recent()[0].outcome == "error"
+    assert store.recent()[0].route_reason.endswith(":deadline")
+
+
+def test_cost_attributed_to_returned_model(env):
+    from destiny_brain.costs import cost_usd
+    e, p, store, *_ = build(env, make_result("hi", model="claude-sonnet-5-5"))
+    e.handle(req("what is two plus two"))
+    rec = store.recent()[0]
+    assert rec.model == "claude-sonnet-5-5"
+    sonnet = env[0].prices["claude-sonnet-5-5"]
+    assert rec.cost_usd == pytest.approx(cost_usd(sonnet, Usage(100, 20)))
 
 
 def test_continue_conversation_on_question(env):
@@ -215,7 +299,7 @@ def test_continue_conversation_on_question(env):
 def test_weather_line_none_on_ha_failure(env):
     e, p, *_ = build(env, ha=FakeHA(weather=None))
     assert e.handle(req("hi")).speech
-    assert "weather" not in p.calls[0]["system"][1]["text"].lower()
+    assert "weather" not in p.calls[0]["messages"][-1]["content"].lower()
 
 
 def test_non_ascii_round_trip(env):

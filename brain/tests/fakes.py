@@ -18,9 +18,9 @@ class FakeProvider:
         self.results = list(results)
         self.calls = []
 
-    def complete(self, *, model, system, messages, tools, effort, max_tokens=1024):
+    def complete(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None):
         self.calls.append(dict(model=model, system=system, messages=[dict(m) for m in messages],
-                               tools=tools, effort=effort, max_tokens=max_tokens))
+                               tools=tools, effort=effort, max_tokens=max_tokens, timeout=timeout))
         r = self.results.pop(0) if self.results else make_result(model=model)
         if isinstance(r, Exception):
             raise r

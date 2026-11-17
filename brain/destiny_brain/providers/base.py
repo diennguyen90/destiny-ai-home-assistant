@@ -41,4 +41,5 @@ class ChatProvider(Protocol):
         tools: list[ToolSpec],
         effort: str,
         max_tokens: int = 1024,
+        timeout: float | None = None,
     ) -> ProviderResult: ...

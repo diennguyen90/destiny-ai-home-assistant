@@ -159,3 +159,34 @@ def test_other_status_error_is_server():
     with pytest.raises(ProviderError) as ei:
         run(FakeClient(exc=_status(anthropic.APIStatusError, 418)))
     assert ei.value.kind == "server"
+
+
+def test_timeout_passed_via_with_options():
+    client = FakeClient()
+    seen = []
+
+    def with_options(**kw):
+        seen.append(kw)
+        return client
+
+    client.with_options = with_options
+    AnthropicProvider(client).complete(
+        model="claude-haiku-5-5", system=SYSTEM, messages=MSGS, tools=[], effort="low", timeout=4.5)
+    assert seen == [{"timeout": 4.5}]
+    assert len(client.calls) == 1
+
+
+def test_no_timeout_does_not_call_with_options():
+    client = FakeClient()
+
+    def boom(**kw):
+        raise AssertionError("unexpected")
+
+    client.with_options = boom
+    run(client)
+
+
+def test_build_client_no_retries():
+    from destiny_brain.providers.anthropic_provider import build_client
+    c = build_client("k")
+    assert c.max_retries == 0 and c.timeout == 6.0

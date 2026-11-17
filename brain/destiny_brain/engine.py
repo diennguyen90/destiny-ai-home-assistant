@@ -23,6 +23,9 @@ ERROR_LINE = "Sorry, something went wrong in my head. Please try again."
 REFUSAL_LINE = "I can't help with that one. Let's ask a grown-up."
 
 MAX_HISTORY = 20
+MAX_CONVERSATION_ID = 128
+TOTAL_BUDGET_S = 13.5
+MIN_CALL_S = 1.0
 HISTORY_TTL = timedelta(minutes=10)
 
 
@@ -40,6 +43,10 @@ class ConverseResponse:
     speech: str
     conversation_id: str
     continue_conversation: bool
+
+
+class _DeadlineExceeded(Exception):
+    pass
 
 
 @dataclass
@@ -90,19 +97,23 @@ class Engine:
             tier, reason = 1, "soft_cap"
             self._notify_soft_cap(now)
 
-        messages = history + [{"role": "user", "content": text}]
-        system = [
-            {"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": self._context(now)},
-        ]
+        # Volatile context is an append-only mid-conversation system message after the user turn,
+        # so the top-level system and all earlier messages stay byte-identical (thinking replay).
+        messages = history + [{"role": "user", "content": text},
+                              {"role": "system", "content": self._context(now)}]
+        system = [{"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}}]
         result: ProviderResult | None = None
         try:
             if tier == 1:
-                result = self._call(1, reason, system, messages, [ESCALATE_TOOL], cid, req, len(text))
+                result = self._call(1, reason, system, messages, [ESCALATE_TOOL], cid, req, len(text), now)
                 if any(name == ESCALATE_TOOL.name for name, _ in result.tool_calls):
                     tier, reason, result = 2, "escalated", None
             if result is None:
-                result = self._call(tier, reason, system, messages, [], cid, req, len(text))
+                result = self._call(tier, reason, system, messages, [], cid, req, len(text), now)
+        except _DeadlineExceeded:
+            log.warning("model call skipped: deadline")
+            return self._respond(ERROR_LINE, cid, req, tier, self._model(tier), reason + ":deadline",
+                                 "error", len(text))
         except Exception as exc:
             log.warning("model call failed: %s", getattr(exc, "kind", type(exc).__name__))
             return self._respond(ERROR_LINE, cid, req, tier, self._model(tier), reason, "error", len(text))
@@ -110,10 +121,16 @@ class Engine:
         if result.stop_reason == "refusal":
             return self._respond(REFUSAL_LINE, cid, req, tier, result.model, reason, "refusal", len(text),
                                  log_it=False)
+        if not result.text.strip():
+            return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error",
+                                 len(text))
         with self._lock:
             conv = self._convs.get(cid)
             if conv is not None:
-                conv.history = (messages + [{"role": "assistant", "content": result.content}])[-MAX_HISTORY:]
+                kept = (messages + [{"role": "assistant", "content": result.content}])[-MAX_HISTORY:]
+                while kept and kept[0]["role"] != "user":  # a replayable history must start with a user turn
+                    kept = kept[1:]
+                conv.history = kept
                 conv.last_ts = self._clock()
                 conv.tier = tier
         speech = result.text
@@ -122,29 +139,38 @@ class Engine:
     def _model(self, tier: int) -> str:
         return self._s.tier1_model if tier == 1 else self._s.tier2_model
 
-    def _call(self, tier, reason, system, messages, tools, cid, req, chars) -> ProviderResult:
+    def _call(self, tier, reason, system, messages, tools, cid, req, chars, started) -> ProviderResult:
         """One model call, logged. A tier-1 call that escalates is logged with reason 'escalated'."""
         model = self._model(tier)
         effort = self._s.tier1_effort if tier == 1 else self._s.tier2_effort
+        remaining = TOTAL_BUDGET_S - (self._clock() - started).total_seconds()
+        if remaining < MIN_CALL_S:
+            raise _DeadlineExceeded()
         start = time.monotonic()
         result = self._provider.complete(
-            model=model, system=system, messages=messages, tools=tools, effort=effort, max_tokens=1024
+            model=model, system=system, messages=messages, tools=tools, effort=effort, max_tokens=1024,
+            timeout=max(MIN_CALL_S, remaining),
         )
         latency = int((time.monotonic() - start) * 1000)
         escalated = any(n == ESCALATE_TOOL.name for n, _ in result.tool_calls)
         outcome = "refusal" if result.stop_reason == "refusal" else "ok"
-        self._log(cid, req, tier, model, "escalated" if escalated else reason, result.usage, latency,
-                  outcome, chars)
+        self._log(cid, req, tier, result.model or model, "escalated" if escalated else reason, result.usage, latency,
+                  outcome, chars, requested=model)
         return result
 
-    def _log(self, cid, req, tier, model, reason, usage: Usage, latency, outcome, chars) -> None:
-        price = self._s.prices.get(model) if model else None
+    def _log(self, cid, req, tier, model, reason, usage: Usage, latency, outcome, chars, requested=None) -> None:
+        price = self._price(model, requested)
         cost = cost_usd(price, usage) if price else 0.0
         self._store.log(RequestRecord(
             ts_utc=self._clock(), conversation_id=cid, device_id=req.device_id, tier=tier, model=model,
             route_reason=reason, usage=usage, cost_usd=cost, latency_ms=latency, outcome=outcome,
             text_chars=chars,
         ))
+
+    def _price(self, model, requested):
+        if not model:
+            return None
+        return self._s.prices.get(model, self._s.prices.get(requested) if requested else None)
 
     def _respond(self, speech, cid, req, tier, model, reason, outcome, chars, log_it=True) -> ConverseResponse:
         if log_it:
@@ -155,9 +181,10 @@ class Engine:
         with self._lock:
             for k in [k for k, c in self._convs.items() if now - c.last_ts > HISTORY_TTL]:
                 del self._convs[k]
-            conv = self._convs.get(conversation_id) if conversation_id else None
-            if conv is None:
+            if not (isinstance(conversation_id, str) and 0 < len(conversation_id) <= MAX_CONVERSATION_ID):
                 conversation_id = uuid.uuid4().hex
+            conv = self._convs.get(conversation_id)
+            if conv is None:
                 conv = self._convs[conversation_id] = _Conversation([], now)
             return conversation_id, list(conv.history), conv.tier
 

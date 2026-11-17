@@ -10,8 +10,8 @@ SONNET_PREFIX = "claude-sonnet"
 
 
 def build_client(api_key: str) -> anthropic.Anthropic:
-    # 6 s x (1 retry + 1 attempt) keeps the total under the connector's 15 s.
-    return anthropic.Anthropic(api_key=api_key, timeout=6.0, max_retries=1)
+    # One attempt per call; the engine enforces the overall deadline via per-call timeouts.
+    return anthropic.Anthropic(api_key=api_key, timeout=6.0, max_retries=0)
 
 
 def _map_error(exc: Exception) -> ProviderError | None:
@@ -44,6 +44,7 @@ class AnthropicProvider:
         tools: list[ToolSpec],
         effort: str,
         max_tokens: int = 1024,
+        timeout: float | None = None,
     ) -> ProviderResult:
         kwargs: dict = {
             "model": model,
@@ -58,13 +59,14 @@ class AnthropicProvider:
                 for t in tools
             ]
             kwargs["tool_choice"] = {"type": "auto"}
+        client = self._client.with_options(timeout=timeout) if timeout is not None else self._client
         try:
             if model.startswith(SONNET_PREFIX):
-                resp = self._client.beta.messages.create(
+                resp = client.beta.messages.create(
                     **kwargs, betas=[FALLBACK_BETA], fallbacks="default"
                 )
             else:
-                resp = self._client.messages.create(**kwargs)
+                resp = client.messages.create(**kwargs)
         except anthropic.APIError as exc:
             mapped = _map_error(exc)
             if mapped is None:
