@@ -64,9 +64,9 @@ You see `Home Assistant returned HTTP 400 for /api/conversation/process` (or 404
 
 ### `FAIL multi-turn:` "context was lost"
 
-You see: `answer does not mention Saturday, so context was lost: ...`
+You see: `answer does not mention humidity, so context was lost: ...` (the follow-up is "And how humid is it?").
 
-- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "Saturday" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (instructions pasted, "Device control" ticked under AI tools). If Destiny says she cannot see the forecast but still names Saturday, that is fine.
+- Cause: either the follow-up was not treated as part of the same conversation, or Claude simply did not say the word "humid" in its answer. Run the test once more and read the printed answer before assuming context was lost. If it repeats and the answer really ignores the earlier question, check the agent settings (instructions pasted, "Device control" ticked under AI tools). The follow-up is about current humidity, so the weather entity must be exposed.
 
 ### The smoke test hangs, or reports a protocol error on whisper or piper
 
@@ -80,6 +80,49 @@ You see the test sit for a long time, or messages like `Connection closed while 
 - "python is not recognized" or a syntax error: the smoke test needs Python 3.8 or newer. Check with `python --version`, and install Python from https://www.python.org/ if needed.
 - The smoke test crashes with a long Python error message ending in `UnicodeDecodeError` (and `docker compose` may also complain about `.env`): the `.env` file may have been saved as UTF-16, which happens if it was created with PowerShell `>` redirection. Open `.env` in Notepad, choose File > Save As, set Encoding to `UTF-8`, and save over it.
 - Windows line endings, comments, blank lines and quoted values in `.env` are all handled automatically; you do not need to fix them.
+
+## Phase 2 brain problems
+
+### Destiny says "My brain is taking a nap. Try again in a minute."
+
+- Cause: Home Assistant could not reach the brain, or it took longer than 15 seconds. Timers and the time still work because Home Assistant handles them itself.
+- Fix: run `docker compose ps` and check `brain` is `Up`; if not, run `docker compose up -d` and read `docker compose logs brain --tail 50`. Check http://localhost:8000/health. In Home Assistant, Settings > Devices & services > Destiny should show the URL `http://brain:8000`. To get her back right now, set Settings > Voice assistants > Destiny > Conversation agent to "Claude conversation".
+
+### 401 (unauthorized) on converse
+
+You see HTTP 401 from `/v1/converse` in `docker compose logs brain`, or Home Assistant reports the brain rejected the key.
+
+- Cause: the shared key entered in the Destiny integration does not match `BRAIN_SHARED_KEY` in `.env`, or `.env` was changed after the brain started.
+- Fix: copy the current `BRAIN_SHARED_KEY` value from `.env` and reconfigure the Destiny integration in Home Assistant with it. After editing `.env`, run `docker compose up -d --build` so the brain picks it up.
+
+### Parent page: wrong PIN, or it will not load
+
+- Cause: the PIN you typed is not the value of `DESTINY_PARENT_PIN` in `.env`, or `DESTINY_PARENT_PIN` is blank.
+- Fix: check the value in `.env` (set one if blank), run `docker compose up -d --build` after changing it, and try again. If the page does not load from another device, check the firewall rule for TCP 8000 on the Private profile (setup guide, section 9, step 3).
+
+### Destiny says "I've done a lot of thinking today. Let's talk again tomorrow."
+
+- Cause: today's spend reached the hard cap (`DESTINY_HARD_CAP_USD`). The brain makes no model calls until local midnight in `TZ`. Before that, at the soft cap (`DESTINY_SOFT_CAP_USD`), she quietly switches to the cheaper model.
+- Fix: check the spend on the parent page. To allow more today, raise `DESTINY_HARD_CAP_USD` in `.env` and run `docker compose up -d --build`. If the day rolls over at the wrong time, check `TZ`.
+
+### Destiny says "Sorry, something went wrong in my head. Please try again."
+
+- Cause: the Anthropic API failed (rate limit, outage, or an invalid or out-of-credit key). The brain keeps running.
+- Fix: check `ANTHROPIC_API_KEY` and your credit at https://console.anthropic.com/, read `docker compose logs brain --tail 50`, and try again in a minute.
+
+### Destiny says "I didn't catch that. Could you say it again?"
+
+- Cause: the transcript was empty. Speak closer to the Voice PE, or see "Whisper mishears words" below.
+
+### `FAIL brain:` in the smoke test
+
+- Cause: the brain is not running, or `BRAIN_URL` in `.env` is wrong.
+- Fix: run `docker compose up -d --build`, then check http://localhost:8000/health.
+
+### `FAIL conversation:` "answer says weather is unavailable"
+
+- Cause: Destiny could not see the weather. The brain reads `HA_WEATHER_ENTITY` using `BRAIN_HA_TOKEN`.
+- Fix: check the weather entity id in Developer tools > States, check `BRAIN_HA_URL` and `BRAIN_HA_TOKEN` in `.env`, then run `docker compose up -d --build`.
 
 ## Docker and startup problems
 

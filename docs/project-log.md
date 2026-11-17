@@ -4,6 +4,12 @@ A running record of what's built, what was decided and why, and what's next. New
 
 ## Current status
 
+**Phase 2 milestone 1 (Destiny's brain, parity with Phase 1): built, awaiting live verification.**
+
+The brain service, tier routing, spend caps, parent cost page and the Home Assistant "Destiny brain" conversation agent are in. Setup: [setup guide](setup-windows.md) section 9. The smoke test now has a `brain` check (7 checks), and its weather checks fail when Destiny says she can't see the weather. Next: the family runs the live smoke test and switches the Destiny assistant to "Destiny brain".
+
+Phase 1 status:
+
 **Phase 1 (working voice prototype): done, verified live 2026-11-17.**
 
 Destiny answers spoken questions through the Voice PE ("Okay Nabu"), with follow-ups, a tutor-style personality and the cori (high) voice. Smoke test: 6/6.
@@ -66,6 +72,7 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
 - **Known gaps:**
   - The smoke test's weather checks can pass even when Destiny has no weather data. It should fail when she says she can't see the weather.
   - Forecasts aren't available until Phase 2.
+  - (Update: the smoke test weather gap was fixed in Phase 2 milestone 1.)
 
 ### 2026-11-07: Plan and build
 
