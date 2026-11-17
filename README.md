@@ -16,6 +16,7 @@ Then open http://localhost:8123 and follow the setup guide to finish configurati
 
 ## Docs
 
+- [Project log](docs/project-log.md): status, decisions and what's next
 - [Windows setup guide](docs/setup-windows.md)
 - [Voice PE setup](docs/voice-pe-setup.md)
 - [Troubleshooting](docs/troubleshooting.md)
