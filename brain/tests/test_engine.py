@@ -156,15 +156,27 @@ def test_history_expires_after_10_min(env):
     assert len(p.calls[2]["messages"]) == 2
 
 
-def test_history_capped_at_20_messages(env):
+def test_history_never_starts_with_non_user(env):
     e, p, *_ = build(env)
-    cid = e.handle(req("m0")).conversation_id
+    cid = e.handle(req("m0", "H1")).conversation_id
     for i in range(1, 15):
         e.handle(req(f"m{i}", cid))
-    msgs = p.calls[-1]["messages"]
-    assert len(msgs) <= 22
-    assert msgs[0]["role"] == "user"
-    assert msgs[-2]["role"] == "user" and msgs[-1]["role"] == "system"
+    for c in p.calls:
+        msgs = c["messages"]
+        assert msgs[0]["role"] == "user"
+        assert len(msgs) % 3 == 2
+        assert msgs[-2]["role"] == "user" and msgs[-1]["role"] == "system"
+
+
+def test_history_resets_after_max_turns(env):
+    e, p, *_ = build(env)
+    cid = "R1"
+    for i in range(13):
+        assert e.handle(req(f"m{i}", cid)).conversation_id == cid
+    assert len(p.calls[11]["messages"]) == 35  # 12th turn still sees 11 full turns
+    assert [m["role"] for m in p.calls[12]["messages"]] == ["user", "system"]
+    e.handle(req("m13", cid))
+    assert len(p.calls[13]["messages"]) == 5
 
 
 def test_hard_cap_blocks(env):

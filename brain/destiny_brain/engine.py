@@ -22,7 +22,7 @@ CAPPED_LINE = "I've done a lot of thinking today. Let's talk again tomorrow."
 ERROR_LINE = "Sorry, something went wrong in my head. Please try again."
 REFUSAL_LINE = "I can't help with that one. Let's ask a grown-up."
 
-MAX_HISTORY = 20
+MAX_TURNS = 12  # complete [user, system, assistant] turns kept before a fresh start
 MAX_CONVERSATION_ID = 128
 TOTAL_BUDGET_S = 13.5
 MIN_CALL_S = 1.0
@@ -127,10 +127,7 @@ class Engine:
         with self._lock:
             conv = self._convs.get(cid)
             if conv is not None:
-                kept = (messages + [{"role": "assistant", "content": result.content}])[-MAX_HISTORY:]
-                while kept and kept[0]["role"] != "user":  # a replayable history must start with a user turn
-                    kept = kept[1:]
-                conv.history = kept
+                conv.history = messages + [{"role": "assistant", "content": result.content}]
                 conv.last_ts = self._clock()
                 conv.tier = tier
         speech = result.text
@@ -184,6 +181,8 @@ class Engine:
             if not (isinstance(conversation_id, str) and 0 < len(conversation_id) <= MAX_CONVERSATION_ID):
                 conversation_id = uuid.uuid4().hex
             conv = self._convs.get(conversation_id)
+            if conv is not None and len(conv.history) >= MAX_TURNS * 3:
+                conv.history = []  # never slice: history is append-only, so start fresh at the cap
             if conv is None:
                 conv = self._convs[conversation_id] = _Conversation([], now)
             return conversation_id, list(conv.history), conv.tier
