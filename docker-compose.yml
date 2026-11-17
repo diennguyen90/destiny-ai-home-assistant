@@ -6,6 +6,7 @@ services:
     container_name: destiny-homeassistant
     volumes:
       - ./ha/config:/config
+      - ./ha/custom_components/destiny:/config/custom_components/destiny
     environment:
       TZ: ${TZ}
     ports:

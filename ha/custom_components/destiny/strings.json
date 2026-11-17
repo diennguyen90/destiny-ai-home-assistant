@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Destiny brain",
+        "description": "Connect Home Assistant to the Destiny brain service.",
+        "data": {
+          "brain_url": "Brain URL",
+          "shared_key": "Shared key"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Destiny brain is already configured."
+    }
+  }
+}
