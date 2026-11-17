@@ -16,8 +16,8 @@ class ModelPrice:
 
 def _default_prices() -> dict[str, ModelPrice]:
     return {
-        "claude-haiku-5-5": ModelPrice(input=1.0, output=5.0, cache_read=0.1, cache_write=1.25),
-        "claude-sonnet-5-5": ModelPrice(input=2.0, output=10.0, cache_read=0.2, cache_write=2.5),
+        "claude-haiku-5-5": ModelPrice(input=0.10, output=0.50, cache_read=0.01, cache_write=0.125),
+        "claude-sonnet-5-5": ModelPrice(input=2.00, output=10.00, cache_read=0.10, cache_write=2.50),
     }
 
 
