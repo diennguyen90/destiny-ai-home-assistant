@@ -30,6 +30,18 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
 
 ## Log
 
+### 2026-11-17: Phase 2 input: model routing (from Andrew)
+
+- **Advice:** use a cheap "decision" model to route requests, so simple things go to tiny or free models and complex ones to bigger models. Add logging and guardrails to see where it's lapsing. Try cheap models (DeepSeek Flash, GLM Flash, Cloudflare Workers AI) for cheap tasks. Start simple and expand when needed.
+- **Adapted for Destiny:**
+  - Tier 0: Home Assistant's built-in commands, which already cost $0 (lights, timers, time).
+  - Tier 1: Haiku for everyday questions.
+  - Tier 2: Sonnet for tutoring and long explanations.
+  - Routing: rules first, with Haiku deciding only when unclear, because a router call adds voice delay.
+  - Logging of model, cost, latency and outcome from day one.
+  - Providers are pluggable, so cheaper ones can be tried where the logs justify it.
+  - Kids' traffic stays on a provider with vetted data and safety policies.
+
 ### 2026-11-17: Phase 1 live setup and verification
 
 - **Home Assistant setup:**
