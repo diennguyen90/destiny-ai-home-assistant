@@ -1,7 +1,7 @@
 # Destiny — Phase 2: Destiny's Brain (Design)
 
 Date: 2026-11-17
-Status: Draft — awaiting family approval
+Status: Approved 2026-11-17
 Builds on: [Phase 1 design](2026-11-07-phase1-voice-prototype-design.md) (working, verified live 2026-11-17)
 
 ## 1. Intent
@@ -438,7 +438,7 @@ My proposal, accepted by the family:
 2. **Profiles, identification v1, Oliver mode, safety:** including red-flag push.
 3. **Cillian learning:**
    - sessions, reading check, worksheet helper, quizzes, topics, mastery
-   - daily summary push and the full parent page
+   - daily summary push, the full parent page, and the family vault (§18)
 4. **Web search.**
 5. **Cillian's screen.**
 
@@ -489,7 +489,42 @@ conversation" agent in HA.
 - The parent page is LAN-only and behind a PIN. The brain port is open on the Private
   firewall profile only.
 
-## 18. Left to the builder
+## 18. Family vault (Obsidian)
+
+The family wants Destiny's knowledge of their life to be readable, browsable and
+scalable: "so we can understand every aspect of our lives". Obsidian is the family's
+reader for it.
+
+- **Two vaults, kept apart:**
+  - **Project docs:** `C:\dev\Destiny\docs`, opened in Obsidian as a vault. It holds how
+    Destiny is built (specs, plans, log). It's git-tracked, and `.obsidian/` is ignored.
+  - **Family vault:** Destiny's view of family life. It's a folder bind-mounted into the
+    brain container, with the path set in `.env`.
+- **Location (my default, changeable):** a folder in OneDrive, so parents can read it on
+  their phones through Obsidian.
+  - Markdown files sync safely; only the SQLite database must stay off OneDrive (it stays
+    in `data/brain/`).
+  - Because OneDrive is a cloud service, the vault holds **summaries only, never raw
+    transcripts or safety-flag details**.
+  - Set the folder to "Always keep on this device" so Docker sees real files.
+- **Phase 2 scope: Destiny writes, one way.** SQLite stays the source of truth, and the
+  vault is a readable mirror, regenerated after each session and nightly.
+  - `Cillian/Daily/YYYY-MM-DD.md`: session summary (minutes, problems, reading rating,
+    quiz results, shaky topics).
+  - `Cillian/Progress.md`: mastery by topic, streaks, current topics.
+  - `Cillian/Reading log.md`: books, chapters, comprehension notes.
+  - `Oliver/Interests.md` and `Oliver/Chats.md` (counts and a happy-moments line, no transcripts).
+  - `Family/Weekly/YYYY-Www.md`: weekly roll-up, including cost.
+  - Notes use YAML frontmatter (date, child, minutes, topics), so Obsidian queries and
+    graphs work and later phases can read them back.
+- **Phase 3 and beyond: two-way.**
+  - Household projects, reminders and family notes live in the vault as Markdown.
+  - Destiny reads and updates them by voice, and parents edit them in Obsidian.
+  - The vault becomes the place where the family's life is organised: projects, house,
+    health, school, plans.
+- Part of milestone 3 (§14), alongside progress tracking.
+
+## 19. Left to the builder
 
 - Exact API shapes between the connector and the brain, and the DB schema.
 - Mastery status thresholds; prompt wording within the rules above.
