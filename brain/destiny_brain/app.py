@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import anyio
 import hmac
+import json
 import os
 import secrets
 import time
@@ -11,8 +13,8 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .config import Settings, load_settings
@@ -59,7 +61,7 @@ def _dashboard(settings: Settings, store: Any) -> str:
         parts.append(f"<tr><td>{escape(day.isoformat())}</td><td>${cost:.4f}</td></tr>")
     parts.append("</table><h2>Last 50 requests</h2><table><tr><th>Time (UTC)</th><th>Tier</th>"
                  "<th>Model</th><th>Reason</th><th>Tokens in/out</th><th>Cost</th>"
-                 "<th>Latency ms</th><th>Outcome</th></tr>")
+                 "<th>Latency ms</th><th>First word (ms)</th><th>Outcome</th></tr>")
     for r in store.recent(50):
         u = r.usage
         parts.append(
@@ -67,7 +69,9 @@ def _dashboard(settings: Settings, store: Any) -> str:
             f"<td>{escape(r.ts_utc.strftime('%Y-%m-%d %H:%M:%S'))}</td><td>{r.tier}</td>"
             f"<td>{escape(r.model or '-')}</td><td>{escape(r.route_reason)}</td>"
             f"<td>{u.input_tokens}/{u.output_tokens}</td><td>${r.cost_usd:.4f}</td>"
-            f"<td>{r.latency_ms}</td><td>{escape(r.outcome)}</td></tr>"
+            f"<td>{r.latency_ms}</td>"
+            f"<td>{'' if r.first_token_ms is None else escape(str(r.first_token_ms))}</td>"
+            f"<td>{escape(r.outcome)}</td></tr>"
         )
     parts.append("</table>")
     return "".join(parts)
@@ -107,6 +111,29 @@ def create_app(settings: Settings, deps: Any = None) -> FastAPI:
         resp = await run_in_threadpool(app.state.deps.engine.handle, req)
         return JSONResponse({"speech": resp.speech, "conversation_id": resp.conversation_id,
                              "continue_conversation": resp.continue_conversation})
+
+    @app.post("/v1/converse/stream")
+    async def converse_stream(request: Request, body: ConverseBody):
+        if not _eq(request.headers.get("X-Destiny-Key", ""), settings.brain_shared_key):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        from .engine import ConverseRequest
+
+        req = ConverseRequest(text=body.text, conversation_id=body.conversation_id,
+                              device_id=body.device_id, satellite_id=body.satellite_id,
+                              language=body.language)
+        events = app.state.deps.engine.handle_stream(req)
+
+        async def lines():
+            try:
+                async for ev in iterate_in_threadpool(events):
+                    yield json.dumps(ev, ensure_ascii=False) + "\n"
+            finally:
+                # Runs on normal end and on client disconnect (cancellation); shielded so the
+                # close still happens while the task is being cancelled.
+                with anyio.CancelScope(shield=True):
+                    await run_in_threadpool(events.close)
+
+        return StreamingResponse(lines(), media_type="application/x-ndjson")
 
     @app.get("/parent", response_class=HTMLResponse)
     async def parent(request: Request):
