@@ -36,6 +36,14 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
 
 ## Log
 
+### 2026-11-17: Wake word decision
+
+- The custom wake word will be **"Destiny"** (not "Hey Destiny"), so Oliver can wake her by shouting her name.
+- If false wake-ups get annoying, we retrain for "Hey Destiny".
+- "Okay Nabu" stays as a second, backup wake word.
+- Scheduled alongside Phase 2 milestone 2 (profiles, Oliver mode).
+- Needs a custom-trained microWakeWord model and custom ESPHome firmware on the Voice PE, built from an ESPHome container. After that, firmware updates are done manually.
+
 ### 2026-11-17: Phase 2 input: model routing (from Andrew)
 
 - **Advice:** use a cheap "decision" model to route requests, so simple things go to tiny or free models and complex ones to bigger models. Add logging and guardrails to see where it's lapsing. Try cheap models (DeepSeek Flash, GLM Flash, Cloudflare Workers AI) for cheap tasks. Start simple and expand when needed.
