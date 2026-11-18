@@ -115,7 +115,8 @@ class Engine:
             return self._respond(ERROR_LINE, cid, req, tier, self._model(tier), reason + ":deadline",
                                  "error", len(text))
         except Exception as exc:
-            log.warning("model call failed: %s", getattr(exc, "kind", type(exc).__name__))
+            detail = str(exc.__cause__ or exc)[:500]
+            log.warning("model call failed: %s: %s", getattr(exc, "kind", type(exc).__name__), detail)
             return self._respond(ERROR_LINE, cid, req, tier, self._model(tier), reason, "error", len(text))
 
         if result.stop_reason == "refusal":

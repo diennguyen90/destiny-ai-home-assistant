@@ -61,15 +61,20 @@ def run(client, model="claude-haiku-5-5", tools=(), effort="low"):
     )
 
 
-def test_haiku_uses_plain_create():
+THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+
+
+def test_haiku_uses_beta_create():
     c = FakeClient()
     run(c)
     kind, kw = c.calls[0]
-    assert kind == "plain"
+    assert kind == "beta"
     assert kw["model"] == "claude-haiku-5-5"
     assert kw["output_config"] == {"effort": "low"}
     assert kw["max_tokens"] == 1024
-    assert "thinking" not in kw and "fallbacks" not in kw and "betas" not in kw
+    assert kw["thinking"] == THINKING
+    assert kw["betas"] == ["thinking-binding-controls-2026-08-01"]
+    assert "fallbacks" not in kw
     assert kw["system"] == SYSTEM and kw["messages"] == MSGS
 
 
@@ -78,10 +83,25 @@ def test_sonnet_uses_beta_fallbacks():
     run(c, model="claude-sonnet-5-5", effort="medium")
     kind, kw = c.calls[0]
     assert kind == "beta"
-    assert kw["betas"] == ["server-side-fallback-2026-07-01"]
+    assert kw["betas"] == [
+        "thinking-binding-controls-2026-08-01",
+        "server-side-fallback-2026-07-01",
+    ]
     assert kw["fallbacks"] == "default"
     assert kw["output_config"] == {"effort": "medium"}
-    assert "thinking" not in kw
+    assert kw["thinking"] == THINKING
+
+
+def test_haiku_and_sonnet_send_drop_block_binding():
+    for model in ("claude-haiku-5-5", "claude-sonnet-5-5"):
+        c = FakeClient()
+        run(c, model=model)
+        kind, kw = c.calls[0]
+        assert kind == "beta"
+        assert kw["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+        assert kw["thinking"]["type"] == "adaptive"
+        assert "budget_tokens" not in kw["thinking"]
+        assert "thinking-binding-controls-2026-08-01" in kw["betas"]
 
 
 def test_tools_auto():

@@ -6,6 +6,7 @@ from ..costs import Usage
 from .base import ProviderError, ProviderResult, ToolSpec
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+BINDING_BETA = "thinking-binding-controls-2026-08-01"
 SONNET_PREFIX = "claude-sonnet"
 
 
@@ -52,6 +53,10 @@ class AnthropicProvider:
             "system": system,
             "messages": messages,
             "output_config": {"effort": effort},
+            "thinking": {
+                "type": "adaptive",
+                "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+            },
         }
         if tools:
             kwargs["tools"] = [
@@ -63,10 +68,10 @@ class AnthropicProvider:
         try:
             if model.startswith(SONNET_PREFIX):
                 resp = client.beta.messages.create(
-                    **kwargs, betas=[FALLBACK_BETA], fallbacks="default"
+                    **kwargs, betas=[BINDING_BETA, FALLBACK_BETA], fallbacks="default"
                 )
             else:
-                resp = client.messages.create(**kwargs)
+                resp = client.beta.messages.create(**kwargs, betas=[BINDING_BETA])
         except anthropic.APIError as exc:
             mapped = _map_error(exc)
             if mapped is None:
