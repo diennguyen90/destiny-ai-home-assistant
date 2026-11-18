@@ -117,6 +117,11 @@ class Engine:
         except Exception:
             log.exception("engine stream failure")
             st.cont = False
+            st.cid = st.cid or uuid.uuid4().hex
+            try:
+                self._log(st.cid, req, 0, None, "unexpected", Usage(0, 0), 0, "error", 0)
+            except Exception:
+                log.exception("error logging failed")
             line = LOST_LINE if st.model_text else ERROR_LINE
             st.spoken.append(line)
             yield {"type": "delta", "text": line}
@@ -230,7 +235,10 @@ class Engine:
             return
         resp = self._finish(plan, tier, reason, result)
         st.cont = resp.continue_conversation
-        if not (st.model_text and resp.speech == result.text):
+        if st.model_text and resp.speech != result.text:
+            st.cont = False  # refusal/empty after partial speech: nothing was committed to history
+            yield LOST_LINE
+        elif not st.model_text:
             yield resp.speech
 
     def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
@@ -240,6 +248,7 @@ class Engine:
         remaining = TOTAL_BUDGET_S - (self._clock() - plan.now).total_seconds()  # deadline: first token
         if remaining < MIN_CALL_S:
             raise _DeadlineExceeded()
+        call_start = time.monotonic()
         gen = self._provider.stream(
             model=model, system=plan.system, messages=plan.messages, tools=[], effort=effort, max_tokens=1024,
             timeout=max(MIN_CALL_S, remaining),
@@ -261,7 +270,7 @@ class Engine:
                 yield delta
         finally:
             gen.close()  # stops provider billing if we were closed early
-        latency = int((time.monotonic() - plan.mono0) * 1000)
+        latency = int((time.monotonic() - call_start) * 1000)
         outcome = "refusal" if result.stop_reason == "refusal" else "ok"
         self._log(plan.cid, plan.req, tier, result.model or model, reason, result.usage, latency, outcome,
                   plan.chars, requested=model, first_token_ms=first_ms)

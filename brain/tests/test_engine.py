@@ -518,3 +518,40 @@ def test_stream_generator_close_stops_provider(env):
     assert next(g)["text"] == "One "
     g.close()
     assert p.stream_closed == [True] and p.stream_yielded == [1]
+
+
+def test_stream_refusal_after_partial_text_uses_lost_line(env):
+    res = make_result("Partial", model="claude-sonnet-5-5", stop_reason="refusal")
+    e, p, store, _ = sbuild(env, streams=[(["Partial"], res), (["Ok."], make_result("Ok.", model="claude-sonnet-5-5"))])
+    deltas, end = run(e, req("explain the water cycle", "c3"))
+    assert deltas == [FILLERS[0] + " ", "Partial", LOST]
+    assert end["continue_conversation"] is False
+    run(e, req("explain more", "c3"))
+    assert [m["role"] for m in p.stream_calls[1]["messages"]] == ["user", "system"]
+
+
+def test_stream_latency_measures_call_only(env, monkeypatch):
+    import itertools
+    from destiny_brain import engine as eng
+    ticks = itertools.chain([100.0, 110.0, 111.0, 112.0], itertools.repeat(112.0))
+    monkeypatch.setattr(eng.time, "monotonic", lambda: next(ticks))
+    res = make_result("Because.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, streams=[(["Because."], res)])
+    run(e, req("explain the water cycle"))
+    rec = store.recent()[0]
+    assert rec.first_token_ms == 11000 and rec.latency_ms == 2000
+
+
+def test_stream_unexpected_error_is_logged_and_log_failure_is_safe(env):
+    e, p, store, _ = sbuild(env)
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    e._resolve = boom
+    deltas, end = run(e, req("hello"))
+    assert deltas == [ERROR] and end["speech"] == ERROR
+    rec = store.recent()[0]
+    assert rec.outcome == "error" and rec.route_reason == "unexpected"
+    e._log = boom
+    deltas, end = run(e, req("hello"))
+    assert deltas == [ERROR]
