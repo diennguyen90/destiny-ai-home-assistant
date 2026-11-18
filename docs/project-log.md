@@ -36,6 +36,31 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
 
 ## Log
 
+### 2026-11-17: Phase 2 milestone 1 (brain parity) verified live
+
+- **Destiny now runs through her own brain** (a FastAPI container) via the "Destiny brain" conversation agent.
+- **Smoke test: 7/7 passed.** She reports real current weather (`weather.home`) and remembers the conversation.
+- **Voice PE checks:**
+  - Time is answered free by Home Assistant.
+  - Quick questions go to Haiku (brain time about 0.9 s).
+  - "Why…" questions go to Sonnet (about 2.8 s).
+  - A follow-up after her question works without the wake word. Answer after the light ring shows she's listening.
+- **End-to-end delay is about 5 s:** speech-to-text 1.5 s, brain 0.9–2.8 s, voice preparation about 1 s.
+- **Next speed win:** stream the answer so she starts speaking the first sentence early. Planned for milestone 2.
+- **Voice** changed to Piper `en_US-lessac-high` (American female).
+- **Audio:** the built-in speaker gets scratchy at full volume. Keep it around 70–80%, or use a 3.5 mm speaker.
+- **Settings and accounts:**
+  - Parent cost page at `http://192.168.86.143:8000/parent` (PIN-protected).
+  - Firewall rule for TCP 8000, Private profile only.
+  - New non-admin HA user `destiny-brain` for the brain's token.
+- **Fixed during review:**
+  - The Voice PE never adopts the conversation id the agent returns, so the brain now adopts the id it is sent.
+  - Time and weather context moved out of the fixed system prompt into a per-turn system message, so replayed thinking stays valid.
+  - History resets after 12 turns instead of being trimmed.
+  - A single model attempt with a 13.5 s deadline.
+  - An empty answer now gets the error line instead of silence.
+- **Known issue:** the old Phase 1 "Claude conversation" (Anthropic integration) fails to load, probably because its API key was removed. It's no longer used. For rollback, use HA's built-in agent or remove the integration.
+
 ### 2026-11-17: Wake word decision
 
 - The custom wake word will be **"Destiny"** (not "Hey Destiny"), so Oliver can wake her by shouting her name.
