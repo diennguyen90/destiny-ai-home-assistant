@@ -193,7 +193,11 @@ class Engine:
             weather = self._ha.weather_line(self._s.ha_weather_entity)
         except Exception:
             weather = None
-        return context_block(now.astimezone(self._tz), weather)
+        try:
+            forecast = self._ha.forecast_line(self._s.ha_weather_entity)
+        except Exception:
+            forecast = None
+        return context_block(now.astimezone(self._tz), weather, forecast)
 
     def _notify_soft_cap(self, now: datetime) -> None:
         day = now.astimezone(self._tz).date()

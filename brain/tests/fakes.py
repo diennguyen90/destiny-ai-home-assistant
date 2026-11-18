@@ -28,12 +28,17 @@ class FakeProvider:
 
 
 class FakeHA:
-    def __init__(self, weather="Home weather now: sunny, 69°F, humidity 26%."):
+    def __init__(self, weather="Home weather now: sunny, 69°F, humidity 26%.",
+                 forecast="Forecast: Today sunny, high 70°F."):
         self.weather = weather
+        self.forecast = forecast
         self.notifications = []
 
     def weather_line(self, entity_id):
         return self.weather
+
+    def forecast_line(self, entity_id, days=3):
+        return self.forecast
 
     def notify(self, service, title, message):
         self.notifications.append((service, title, message))

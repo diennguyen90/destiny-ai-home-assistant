@@ -26,7 +26,9 @@ ESCALATE_TOOL = ToolSpec(
 )
 
 
-def context_block(now_local: datetime, weather_line: str | None) -> str:
+def context_block(
+    now_local: datetime, weather_line: str | None, forecast_line: str | None = None
+) -> str:
     hour = now_local.hour % 12 or 12
     stamp = (
         f"{now_local:%A, %B} {now_local.day}, {now_local.year}, "
@@ -35,4 +37,6 @@ def context_block(now_local: datetime, weather_line: str | None) -> str:
     text = f"Current local date and time: {stamp}."
     if weather_line:
         text += " " + weather_line
+    if forecast_line:
+        text += " " + forecast_line
     return text
