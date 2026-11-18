@@ -135,11 +135,12 @@ The routing, caps, deadline, history and logging are the same as `handle`. These
     comes from the Task 1 spike.
   - Returns the result with the brain's `conversation_id` and `continue_conversation`.
 - **Fallbacks:**
-  - If the stream can't start (connection refused, non-200, or no first line within
-    15 s), call the existing blocking `brain_client.converse` (which already falls back
-    to the nap line).
-  - If the stream starts and then goes silent for more than 10 s, finish with
-    `" Sorry, I lost my train of thought."`.
+  - If the stream can't be established (connection error or non-200 status), call the
+    existing blocking `brain_client.converse` (which already falls back to the nap line).
+  - If a 200 arrives but no first line comes within 15 s, or EOF before any line, do not
+    resend the turn: answer with the nap line (non-streaming, continue False).
+  - If the stream starts and then goes silent for more than 15 s (idle between lines),
+    finish with the partial text plus `" Sorry, I lost my train of thought."`.
 - Parsing the NDJSON lines is pure Python (`stream_client.py`, no `homeassistant`
   imports) so it can be unit tested in the brain container like `brain_client.py`.
 

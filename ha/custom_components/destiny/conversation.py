@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncGenerator
 from typing import Literal
@@ -21,7 +22,7 @@ from .stream_client import LOST_LINE, NdjsonDecoder
 _LOGGER = logging.getLogger(__name__)
 
 FIRST_LINE_TIMEOUT = 15.0
-IDLE_TIMEOUT = 10.0
+IDLE_TIMEOUT = 15.0
 
 
 async def async_setup_entry(
@@ -61,38 +62,51 @@ class DestinyConversationEntity(conversation.ConversationEntity):
         }
         session = async_get_clientsession(self.hass)
         resp = None
+        owned = False
         pending: list[dict] = []
         decoder = NdjsonDecoder()
         chunks = None
+        phase = "connect"
         try:
-            async with asyncio.timeout(FIRST_LINE_TIMEOUT):
-                resp = await session.post(
-                    url.rstrip("/") + "/v1/converse/stream",
-                    json=payload,
-                    headers={"X-Destiny-Key": key},
-                    timeout=aiohttp.ClientTimeout(total=None),
+            try:
+                async with asyncio.timeout(FIRST_LINE_TIMEOUT):
+                    resp = await session.post(
+                        url.rstrip("/") + "/v1/converse/stream",
+                        json=payload,
+                        headers={"X-Destiny-Key": key},
+                        timeout=aiohttp.ClientTimeout(total=None),
+                    )
+                    if resp.status != 200:
+                        raise RuntimeError(f"status {resp.status}")
+                    phase = "first_line"
+                    chunks = resp.content.iter_any().__aiter__()
+                    while not pending:
+                        pending = decoder.feed(await chunks.__anext__())
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Destiny stream failed in phase %s (%s)", phase, type(err).__name__
                 )
-                if resp.status != 200:
-                    raise RuntimeError(f"status {resp.status}")
-                chunks = resp.content.iter_any().__aiter__()
-                while not pending:
-                    pending = decoder.feed(await chunks.__anext__())
-        except Exception as err:  # noqa: BLE001 - any start failure falls back
-            _LOGGER.warning("Destiny stream could not start (%s); falling back", type(err).__name__)
-            if resp is not None:
+                if phase == "connect":
+                    return await self._fallback(user_input, chat_log, url, key, payload)
+                return self._nap(user_input, chat_log, payload)
+            owned = True
+        finally:
+            if not owned and resp is not None:
                 resp.release()
-            return await self._fallback(user_input, chat_log, url, key, payload)
+                resp.close()
 
         end: dict = {}
+        streamed: list[str] = []
 
         async def _deltas() -> AsyncGenerator[conversation.AssistantContentDeltaDict]:
-            nonlocal end, pending
+            nonlocal end
             yield {"role": "assistant"}
             events = pending
             try:
                 while True:
                     for event in events:
                         if event["type"] == "delta" and isinstance(event.get("text"), str):
+                            streamed.append(event["text"])
                             yield {"content": event["text"]}
                         elif event["type"] == "end":
                             end = event
@@ -108,20 +122,26 @@ class DestinyConversationEntity(conversation.ConversationEntity):
                     events = decoder.feed(chunk)
             except Exception as err:  # noqa: BLE001 - stall or broken connection
                 _LOGGER.warning("Destiny stream interrupted (%s)", type(err).__name__)
-            finally:
-                resp.release()
             if not end:
+                streamed.append(LOST_LINE)
                 yield {"content": LOST_LINE}
 
-        async for _ in chat_log.async_add_delta_content_stream(user_input.agent_id, _deltas()):
-            pass
+        try:
+            async with contextlib.aclosing(_deltas()) as gen:
+                async for _ in chat_log.async_add_delta_content_stream(
+                    user_input.agent_id, gen
+                ):
+                    pass
+        finally:
+            resp.release()
+            resp.close()
 
         if end:
             speech = end.get("speech", "")
             conv_id = end.get("conversation_id")
             cont = bool(end.get("continue_conversation", False))
         else:
-            speech = LOST_LINE.strip()
+            speech = "".join(streamed)
             conv_id = payload.get("conversation_id")
             cont = False
         response = intent.IntentResponse(language=user_input.language)
@@ -130,6 +150,20 @@ class DestinyConversationEntity(conversation.ConversationEntity):
             response=response,
             conversation_id=conv_id or chat_log.conversation_id,
             continue_conversation=cont,
+        )
+
+    def _nap(self, user_input, chat_log, payload):
+        chat_log.async_add_assistant_content_without_tools(
+            conversation.AssistantContent(
+                agent_id=user_input.agent_id, content=brain_client.NAP_LINE
+            )
+        )
+        response = intent.IntentResponse(language=user_input.language)
+        response.async_set_speech(brain_client.NAP_LINE)
+        return conversation.ConversationResult(
+            response=response,
+            conversation_id=payload.get("conversation_id") or chat_log.conversation_id,
+            continue_conversation=False,
         )
 
     async def _fallback(self, user_input, chat_log, url, key, payload):

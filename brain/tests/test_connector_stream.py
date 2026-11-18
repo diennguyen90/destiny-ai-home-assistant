@@ -52,3 +52,9 @@ def test_decoder_incremental():
     assert d.feed(D1[:10]) == []
     assert d.feed(D1[10:])[0]["text"] == "Hi"
     assert d.flush() == []
+
+
+def test_partial_then_no_end_detected():
+    events = list(sc.parse_ndjson_lines([D1, b'{"type":"delta","text":" there"}\n']))
+    assert not sc.has_end(events)
+    assert "".join(e["text"] for e in events) == "Hi there"
