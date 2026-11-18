@@ -20,13 +20,14 @@ def _describe(host, port, timeout=5.0):
     return INFO
 
 
-def _patches(describe=_describe, synth=None, ping=None, converse=None):
+def _patches(describe=_describe, synth=None, ping=None, converse=None, brain=None):
     return [
         mock.patch.object(smoke_test, "wyoming_describe", side_effect=describe),
         mock.patch.object(smoke_test, "piper_synthesize", side_effect=synth or (lambda *a, **k: 1234)),
         mock.patch.object(smoke_test, "ha_ping", side_effect=ping or (lambda *a, **k: "API running.")),
         mock.patch.object(smoke_test, "ha_converse", side_effect=converse or mock.Mock(
-            side_effect=[("Sunny tomorrow.", "cid1"), ("Saturday is rainy.", "cid1")])),
+            side_effect=[("It is sunny and 20 degrees.", "cid1"), ("You asked about the weather.", "cid1")])),
+        mock.patch.object(smoke_test, "brain_health", side_effect=brain or (lambda *a, **k: '{"status":"ok"}')),
     ]
 
 
@@ -54,8 +55,8 @@ class SmokeTests(unittest.TestCase):
                 code = smoke_test.main(["--env", path])
         self.assertEqual(code, 0)
         out = buf.getvalue()
-        self.assertIn("6/6 checks passed", out)
-        self.assertEqual(out.count("PASS "), 6)
+        self.assertIn("7/7 checks passed", out)
+        self.assertEqual(out.count("PASS "), 7)
         self.assertIn("faster-whisper", out)
 
     def test_whisper_down_others_still_run(self):
@@ -68,7 +69,7 @@ class SmokeTests(unittest.TestCase):
         d = {n: ok for n, ok, _ in res}
         self.assertFalse(d["whisper"])
         self.assertTrue(d["piper"])
-        self.assertEqual(len(res), 6)
+        self.assertEqual(len(res), 7)
 
     def test_whisper_empty_asr_fails(self):
         with _Ctx(describe=lambda h, p, timeout=5.0: {"asr": [], "tts": [{"name": "piper"}]}):
@@ -93,6 +94,8 @@ class SmokeTests(unittest.TestCase):
             smoke_test.run_checks(ENV)
         calls = m[3].call_args_list
         self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0][2], "What's the weather like at home right now?")
+        self.assertEqual(calls[1][0][2], "What did I just ask you about?")
         self.assertEqual(calls[1][1].get("conversation_id"), "cid1")
         self.assertIsNone(calls[0][1].get("agent_id"))
 
@@ -117,13 +120,49 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("boom", d["conversation"])
         self.assertIn("HA_AGENT_ID is empty", d["conversation"])
 
-    def test_multi_turn_fails_without_saturday(self):
+    def test_multi_turn_fails_without_weather(self):
         conv = mock.Mock(side_effect=[("Sunny.", "c"), ("What do you mean?", "c")])
         with _Ctx(converse=conv):
             res = smoke_test.run_checks(ENV)
         d = {n: ok for n, ok, _ in res}
         self.assertTrue(d["conversation"])
         self.assertFalse(d["multi-turn"])
+
+    def test_brain_check_pass(self):
+        with _Ctx():
+            res = smoke_test.run_checks(dict(ENV, BRAIN_URL="http://b:8000"))
+        d = {n: ok for n, ok, _ in res}
+        self.assertTrue(d["brain"])
+        self.assertEqual([n for n, _, _ in res],
+                         ["whisper", "piper", "piper-audio", "brain", "ha-api", "conversation", "multi-turn"])
+
+    def test_brain_check_fail_when_down(self):
+        def down(*a, **k):
+            raise smoke_test.HAError("Cannot reach the brain")
+        with _Ctx(brain=down) as m:
+            res = smoke_test.run_checks(ENV)
+        d = {n: (ok, det) for n, ok, det in res}
+        self.assertFalse(d["brain"][0])
+        self.assertIn("Cannot reach", d["brain"][1])
+        self.assertTrue(d["ha-api"][0])
+        self.assertEqual(m[4].call_args[0][0], "http://localhost:8000")
+
+    def test_conversation_fails_when_weather_unavailable(self):
+        conv = mock.Mock(side_effect=[("I don't have access to weather data.", "c")])
+        with _Ctx(converse=conv):
+            res = smoke_test.run_checks(ENV)
+        d = {n: (ok, det) for n, ok, det in res}
+        self.assertFalse(d["conversation"][0])
+        self.assertIn("answer says weather is unavailable: I don't have access to weather data.",
+                      d["conversation"][1])
+        self.assertEqual(d["multi-turn"], (False, "skipped: conversation check failed"))
+
+    def test_curly_apostrophe_weather_unavailable_detected(self):
+        conv = mock.Mock(side_effect=[("I don’t have access to weather data.", "c")])
+        with _Ctx(converse=conv):
+            res = smoke_test.run_checks(ENV)
+        d = {n: ok for n, ok, _ in res}
+        self.assertFalse(d["conversation"])
 
     def test_conversation_failure_skips_multi_turn(self):
         conv = mock.Mock(side_effect=HAError("boom"))

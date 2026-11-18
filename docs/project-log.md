@@ -4,6 +4,12 @@ A running record of what's built, what was decided and why, and what's next. New
 
 ## Current status
 
+**Phase 2 milestone 1 (Destiny's brain, parity with Phase 1): built, awaiting live verification.**
+
+The brain service, tier routing, spend caps, parent cost page and the Home Assistant "Destiny brain" conversation agent are in. Setup: [setup guide](setup-windows.md) section 9. The smoke test now has a `brain` check (7 checks), and its weather checks fail when Destiny says she can't see the weather. Next: the family runs the live smoke test and switches the Destiny assistant to "Destiny brain".
+
+Phase 1 status:
+
 **Phase 1 (working voice prototype): done, verified live 2026-11-17.**
 
 Destiny answers spoken questions through the Voice PE ("Okay Nabu"), with follow-ups, a tutor-style personality and the cori (high) voice. Smoke test: 6/6.
@@ -29,6 +35,39 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
    - move to an always-on mini PC
 
 ## Log
+
+### 2026-11-17: Phase 2 milestone 1 (brain parity) verified live
+
+- **Destiny now runs through her own brain** (a FastAPI container) via the "Destiny brain" conversation agent.
+- **Smoke test: 7/7 passed.** She reports real current weather (`weather.home`) and remembers the conversation.
+- **Voice PE checks:**
+  - Time is answered free by Home Assistant.
+  - Quick questions go to Haiku (brain time about 0.9 s).
+  - "Why…" questions go to Sonnet (about 2.8 s).
+  - A follow-up after her question works without the wake word. Answer after the light ring shows she's listening.
+- **End-to-end delay is about 5 s:** speech-to-text 1.5 s, brain 0.9–2.8 s, voice preparation about 1 s.
+- **Next speed win:** stream the answer so she starts speaking the first sentence early. Planned for milestone 2.
+- **Voice** changed to Piper `en_US-lessac-high` (American female).
+- **Audio:** the built-in speaker gets scratchy at full volume. Keep it around 70–80%, or use a 3.5 mm speaker.
+- **Settings and accounts:**
+  - Parent cost page at `http://192.168.86.143:8000/parent` (PIN-protected).
+  - Firewall rule for TCP 8000, Private profile only.
+  - New non-admin HA user `destiny-brain` for the brain's token.
+- **Fixed during review:**
+  - The Voice PE never adopts the conversation id the agent returns, so the brain now adopts the id it is sent.
+  - Time and weather context moved out of the fixed system prompt into a per-turn system message, so replayed thinking stays valid.
+  - History resets after 12 turns instead of being trimmed.
+  - A single model attempt with a 13.5 s deadline.
+  - An empty answer now gets the error line instead of silence.
+- **Known issue:** the old Phase 1 "Claude conversation" (Anthropic integration) fails to load, probably because its API key was removed. It's no longer used. For rollback, use HA's built-in agent or remove the integration.
+
+### 2026-11-17: Wake word decision
+
+- The custom wake word will be **"Destiny"** (not "Hey Destiny"), so Oliver can wake her by shouting her name.
+- If false wake-ups get annoying, we retrain for "Hey Destiny".
+- "Okay Nabu" stays as a second, backup wake word.
+- Scheduled alongside Phase 2 milestone 2 (profiles, Oliver mode).
+- Needs a custom-trained microWakeWord model and custom ESPHome firmware on the Voice PE, built from an ESPHome container. After that, firmware updates are done manually.
 
 ### 2026-11-17: Phase 2 input: model routing (from Andrew)
 
@@ -66,6 +105,7 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
 - **Known gaps:**
   - The smoke test's weather checks can pass even when Destiny has no weather data. It should fail when she says she can't see the weather.
   - Forecasts aren't available until Phase 2.
+  - (Update: the smoke test weather gap was fixed in Phase 2 milestone 1.)
 
 ### 2026-11-07: Plan and build
 

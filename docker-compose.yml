@@ -6,6 +6,7 @@ services:
     container_name: destiny-homeassistant
     volumes:
       - ./ha/config:/config
+      - ./ha/custom_components/destiny:/config/custom_components/destiny
     environment:
       TZ: ${TZ}
     ports:
@@ -30,4 +31,20 @@ services:
       - ./data/piper:/data
     ports:
       - "10200:10200"
+    restart: unless-stopped
+
+  brain:
+    build: ./brain
+    container_name: destiny-brain
+    env_file: .env
+    volumes:
+      - ./data/brain:/data
+      - ./ha/custom_components/destiny:/connector:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped

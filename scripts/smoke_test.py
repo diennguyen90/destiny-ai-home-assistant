@@ -1,7 +1,11 @@
 """Destiny Phase 1 smoke test: proves the whole voice loop works. Stdlib only."""
 import argparse
+import json
 import os
+import socket
 import sys
+import urllib.error
+import urllib.request
 from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +20,28 @@ Result = Tuple[str, bool, str]
 NO_AGENT_HINT = (" (HA_AGENT_ID is empty, so Home Assistant's built-in agent answered, "
                  "not Claude; see docs/setup-windows.md)")
 NO_TOKEN = "HA_TOKEN is empty in .env — see docs/setup-windows.md"
+
+
+WEATHER_UNAVAILABLE = ("can't see", "don't have access", "no weather", "not able to see")
+
+
+def brain_health(base_url, timeout=5.0):
+    # type: (str, float) -> str
+    url = base_url.rstrip("/") + "/health"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise HAError("the brain at %s returned HTTP %d" % (url, e.code))
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        raise HAError("Cannot reach the brain at %s (%s)" % (url, e))
+    try:
+        ok = json.loads(body).get("status") == "ok"
+    except (ValueError, AttributeError):
+        ok = False
+    if not ok:
+        raise HAError("the brain at %s did not answer {\"status\":\"ok\"}: %s" % (url, body[:200]))
+    return "status ok"
 
 
 def _port(env, key, default):
@@ -66,6 +92,8 @@ def run_checks(env):
         return "%d bytes of audio" % n
     record("piper-audio", synth)
 
+    record("brain", lambda: brain_health(env.get("BRAIN_URL") or "http://localhost:8000"))
+
     base = env.get("HA_URL") or "http://localhost:8123"
     token = env.get("HA_TOKEN") or ""
     agent = env.get("HA_AGENT_ID") or None
@@ -81,9 +109,12 @@ def run_checks(env):
     state = {}  # type: Dict[str, Optional[str]]
 
     def conv():
-        speech, cid = ha_converse(base, token, "What's the weather tomorrow?", agent_id=agent)
+        speech, cid = ha_converse(base, token, "What's the weather like at home right now?",
+                                  agent_id=agent)
         if not speech.strip():
             raise HAError("Home Assistant gave an empty answer")
+        if any(p in speech.lower().replace("’", "'") for p in WEATHER_UNAVAILABLE):
+            raise HAError("answer says weather is unavailable: %s" % speech)
         state["cid"] = cid
         return "answer: %s" % speech
     record("conversation", conv)
@@ -96,10 +127,10 @@ def run_checks(env):
         return results
 
     def multi():
-        speech, _ = ha_converse(base, token, "What about Saturday?",
+        speech, _ = ha_converse(base, token, "What did I just ask you about?",
                                 conversation_id=state.get("cid"), agent_id=agent)
-        if "saturday" not in speech.lower():
-            raise HAError("answer does not mention Saturday, so context was lost: %s" % speech)
+        if "weather" not in speech.lower():
+            raise HAError("answer does not mention the weather, so context was lost: %s" % speech)
         return "answer: %s" % speech
     record("multi-turn", multi)
     return results
