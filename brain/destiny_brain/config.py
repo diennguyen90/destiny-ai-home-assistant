@@ -28,7 +28,7 @@ class Settings:
     parent_pin: str
     ha_url: str = "http://homeassistant:8123"
     ha_token: str = ""
-    ha_weather_entity: str = "weather.forecast_home"
+    ha_weather_entity: str = "weather.home"
     notify_service: str = ""
     tz: str = "Etc/UTC"
     db_path: str = "/data/brain.db"
@@ -55,7 +55,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         parent_pin=env["DESTINY_PARENT_PIN"],
         ha_url=g("BRAIN_HA_URL") or "http://homeassistant:8123",
         ha_token=g("BRAIN_HA_TOKEN") or "",
-        ha_weather_entity=g("HA_WEATHER_ENTITY") or "weather.forecast_home",
+        ha_weather_entity=g("HA_WEATHER_ENTITY") or "weather.home",
         notify_service=g("DESTINY_NOTIFY_SERVICE") or "",
         tz=g("TZ") or "Etc/UTC",
         db_path=g("DESTINY_DB_PATH") or "/data/brain.db",

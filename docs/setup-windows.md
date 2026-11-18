@@ -24,7 +24,7 @@ Follow these steps in order. Each step says what you should see when it worked. 
 2. You should see "Welcome to Home Assistant". Click "Create my smart home".
 3. Create the owner account (name, username, password). Choose your own password and keep it safe.
 4. Set your home location and country when asked. Opt out of analytics if you prefer.
-5. On the "We found..." screen, if the Meteorologisk institutt (Met.no) weather integration is offered, add it. This gives you the free weather entity (it shows as "Home"; its id looks like `weather.forecast_home`). If it is not offered, go to Settings > Devices & services > Add integration > "Meteorologisk institutt (Met.no)" and add it.
+5. On the "We found..." screen, if the Meteorologisk institutt (Met.no) weather integration is offered, add it. This gives you the free weather entity (it shows as "Home"; its id looks like `weather.home`; the exact id can differ, search 'weather' under Settings > Devices & services > Entities). If it is not offered, go to Settings > Devices & services > Add integration > "Meteorologisk institutt (Met.no)" and add it.
 6. You should see the Home Assistant dashboard.
 
 ## 4. Add the Whisper and Piper integrations
@@ -76,7 +76,7 @@ You are Destiny, a friendly AI assistant for our family. You are speaking out lo
 **Expose only the weather entity**
 
 1. Still in Settings > Voice assistants, on the Assistants tab, turn OFF "Expose new entities". It is on by default and would give Claude every device you add later.
-2. Open the Expose tab > "Expose entities" and search "weather". The entity shows as "Home" with a sun icon (its id looks like `weather.forecast_home`). Tick it and click Expose.
+2. Open the Expose tab > "Expose entities" and search "weather". The entity shows as "Home" with a sun icon (its id looks like `weather.home`; the exact id can differ, search 'weather' under Settings > Devices & services > Entities). Tick it and click Expose.
 3. Remove any other exposed entities. You should see exactly one exposed entity: the weather. Claude can then answer weather questions but cannot control any device. (Widening this is a deliberate later step.)
 
 **Known Phase 1 limit: no forecasts.** Destiny sees current conditions (temperature, sky, humidity) but not forecasts. If you ask about tomorrow she will say she can't see the forecast. Forecasts and web access come in Phase 2.
@@ -110,7 +110,7 @@ The brain is a small service (port 8000) that sits between Home Assistant and Cl
    - `DESTINY_PARENT_PIN`: the PIN for the parent page (step 7).
    - `BRAIN_HA_URL`: leave as `http://homeassistant:8123`.
    - `BRAIN_HA_TOKEN`: a token for a new non-admin Home Assistant user. In Home Assistant go to Settings > People > Users tab > Add user, name it `destiny-brain`, set a password, and leave "Administrator" turned off. Open a private (incognito) browser window, sign in to Home Assistant as `destiny-brain` once, then click its name at the bottom left to open Profile > Security tab > Long-lived access tokens > Create token, and copy the token (it is shown only once). Paste it after `BRAIN_HA_TOKEN=`.
-   - `HA_WEATHER_ENTITY`: leave as `weather.forecast_home` unless your weather entity has a different id.
+   - `HA_WEATHER_ENTITY`: leave as `weather.home` unless your weather entity has a different id.
    - `DESTINY_NOTIFY_SERVICE`: the Home Assistant notify service for your phone, for example `mobile_app_<phone>`. Find it in Home Assistant under Developer tools > Actions by searching `notify.mobile_app`. Leave blank for none.
    - `TZ`: your timezone, for example `America/Los_Angeles`. The daily spend caps reset at midnight in this timezone.
    - `DESTINY_SOFT_CAP_USD` and `DESTINY_HARD_CAP_USD`: daily spend caps in dollars. At the soft cap Destiny switches to the cheaper model; at the hard cap she stops calling Claude until tomorrow. The defaults are 1.0 and 3.0.

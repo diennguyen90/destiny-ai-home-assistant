@@ -193,7 +193,7 @@ The light ring reacts to you, but no answer is spoken.
 
 First decide which of these you are seeing.
 
-- She has no weather at all (cannot tell you the current temperature or sky). Cause: the weather entity is not exposed to the assistant, or the Met.no weather integration is not installed. Fix: go to Settings > Voice assistants > Expose tab and make sure the weather entity ("Home" with a sun icon, id like `weather.forecast_home`) is exposed. If it does not exist, add the "Meteorologisk institutt (Met.no)" integration (setup guide, section 3).
+- She has no weather at all (cannot tell you the current temperature or sky). Cause: the weather entity is not exposed to the assistant, or the Met.no weather integration is not installed. Fix: go to Settings > Voice assistants > Expose tab and make sure the weather entity ("Home" with a sun icon, id like `weather.home`; the exact id can differ, search 'weather' under Settings > Devices & services > Entities) is exposed. If it does not exist, add the "Meteorologisk institutt (Met.no)" integration (setup guide, section 3).
 - She knows the current conditions but says she can't see tomorrow's forecast. This is expected in Phase 1: Destiny sees current conditions (temperature, sky, humidity) but not forecasts. Forecasts and web access come in Phase 2.
 
 ### Claude can control devices I did not expect
