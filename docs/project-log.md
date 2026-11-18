@@ -36,6 +36,23 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
 
 ## Log
 
+### 2026-11-17 (evening): Voice, forecast and live fixes
+
+- **Voice:**
+  - Now ElevenLabs "Serena – Gentle Coach and Wellness Guide" on the Multilingual v2 model, stability 0.7.
+  - Flash sounded rushed. Multilingual v2 costs about 2× the credits per character.
+  - Piper stays installed as the free fallback.
+- **Brain fix:** switching between Haiku and Sonnet in one conversation caused a 400 ("thinking block bound to a different conversation… tools list differs"). All calls now send `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` (beta `thinking-binding-controls-2026-08-01`). Failed calls now log Anthropic's detailed error.
+- **Forecast:** the brain adds a 3-day daily forecast from `weather.get_forecasts` to the per-turn context, so Destiny answers "what's the weather tomorrow?".
+- **Voice PE:**
+  - "Finished speaking detection" set to `relaxed` for pauses and kids.
+  - A stuck red ring (known firmware glitch) was cleared by toggling the mute switch.
+  - An external speaker on the 3.5 mm jack works.
+- **Usage so far:**
+  - 48 Claude requests through the brain, about $0.07 total.
+  - Haiku: 26 requests, about $0.002.
+  - Sonnet: 22 requests, about $0.064.
+
 ### 2026-11-17: Phase 2 milestone 1 (brain parity) verified live
 
 - **Destiny now runs through her own brain** (a FastAPI container) via the "Destiny brain" conversation agent.
