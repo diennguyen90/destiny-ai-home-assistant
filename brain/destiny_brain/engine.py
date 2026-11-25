@@ -4,11 +4,13 @@ import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import Settings
+from .fillers import FillerPicker
 from .costs import Usage, cost_usd
 from .prompts import DESTINY_BASE, ESCALATE_TOOL, context_block
 from .providers.base import ProviderResult
@@ -21,6 +23,7 @@ EMPTY_LINE = "I didn't catch that. Could you say it again?"
 CAPPED_LINE = "I've done a lot of thinking today. Let's talk again tomorrow."
 ERROR_LINE = "Sorry, something went wrong in my head. Please try again."
 REFUSAL_LINE = "I can't help with that one. Let's ask a grown-up."
+LOST_LINE = " Sorry, I lost my train of thought."
 
 MAX_TURNS = 12  # complete [user, system, assistant] turns kept before a fresh start
 MAX_CONVERSATION_ID = 128
@@ -50,6 +53,27 @@ class _DeadlineExceeded(Exception):
 
 
 @dataclass
+class _Plan:
+    cid: str
+    req: ConverseRequest
+    chars: int
+    tier: int
+    reason: str
+    messages: list[dict]
+    system: list[dict]
+    now: datetime
+    mono0: float
+
+
+@dataclass
+class _StreamState:
+    cid: str
+    cont: bool = False
+    model_text: bool = False
+    spoken: list[str] = field(default_factory=list)
+
+
+@dataclass
 class _Conversation:
     history: list[dict]
     last_ts: datetime
@@ -57,12 +81,14 @@ class _Conversation:
 
 
 class Engine:
-    def __init__(self, settings: Settings, store, provider, ha, clock=lambda: datetime.now(UTC)):
+    def __init__(self, settings: Settings, store, provider, ha, clock=lambda: datetime.now(UTC),
+                 fillers=None):
         self._s = settings
         self._store = store
         self._provider = provider
         self._ha = ha
         self._clock = clock
+        self._fillers = fillers or FillerPicker()
         self._tz = ZoneInfo(settings.tz)
         self._lock = threading.Lock()
         self._convs: dict[str, _Conversation] = {}
@@ -80,9 +106,34 @@ class Engine:
             except Exception:
                 return ConverseResponse(ERROR_LINE, cid or uuid.uuid4().hex, False)
 
+    def handle_stream(self, req: ConverseRequest) -> Iterator[dict]:
+        """NDJSON event dicts: `delta` events, then exactly one `end`. Never raises."""
+        st = _StreamState(req.conversation_id or "")
+        inner = self._stream(req, st)
+        try:
+            for text in inner:
+                st.spoken.append(text)
+                yield {"type": "delta", "text": text}
+        except Exception:
+            log.exception("engine stream failure")
+            st.cont = False
+            st.cid = st.cid or uuid.uuid4().hex
+            try:
+                self._log(st.cid, req, 0, None, "unexpected", Usage(0, 0), 0, "error", 0)
+            except Exception:
+                log.exception("error logging failed")
+            line = LOST_LINE if st.model_text else ERROR_LINE
+            st.spoken.append(line)
+            yield {"type": "delta", "text": line}
+        finally:
+            inner.close()
+        yield {"type": "end", "speech": "".join(st.spoken), "conversation_id": st.cid or uuid.uuid4().hex,
+               "continue_conversation": st.cont}
+
     # -- internals --
 
-    def _handle(self, req: ConverseRequest) -> ConverseResponse:
+    def _plan(self, req: ConverseRequest) -> _Plan | ConverseResponse:
+        """Shared first steps: resolve conversation, caps, routing, request build. Early-outs are final."""
         text = clean_text(req.text or "")
         now = self._clock()
         cid, history, previous_tier = self._resolve(req.conversation_id, now)
@@ -102,37 +153,128 @@ class Engine:
         messages = history + [{"role": "user", "content": text},
                               {"role": "system", "content": self._context(now)}]
         system = [{"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}}]
+        return _Plan(cid, req, len(text), tier, reason, messages, system, now, time.monotonic())
+
+    def _handle(self, req: ConverseRequest) -> ConverseResponse:
+        plan = self._plan(req)
+        if isinstance(plan, ConverseResponse):
+            return plan
+        tier, reason = plan.tier, plan.reason
         result: ProviderResult | None = None
         try:
             if tier == 1:
-                result = self._call(1, reason, system, messages, [ESCALATE_TOOL], cid, req, len(text), now)
-                if any(name == ESCALATE_TOOL.name for name, _ in result.tool_calls):
+                result = self._tier1(plan)
+                if self._escalated(result):
                     tier, reason, result = 2, "escalated", None
             if result is None:
-                result = self._call(tier, reason, system, messages, [], cid, req, len(text), now)
-        except _DeadlineExceeded:
-            log.warning("model call skipped: deadline")
-            return self._respond(ERROR_LINE, cid, req, tier, self._model(tier), reason + ":deadline",
-                                 "error", len(text))
+                result = self._call(tier, reason, plan.system, plan.messages, [], plan.cid, req, plan.chars,
+                                    plan.now)
         except Exception as exc:
+            return self._fail(exc, plan, tier, reason)
+        return self._finish(plan, tier, reason, result)
+
+    @staticmethod
+    def _escalated(result: ProviderResult) -> bool:
+        return any(name == ESCALATE_TOOL.name for name, _ in result.tool_calls)
+
+    def _tier1(self, plan: _Plan) -> ProviderResult:
+        return self._call(1, plan.reason, plan.system, plan.messages, [ESCALATE_TOOL], plan.cid, plan.req,
+                          plan.chars, plan.now)
+
+    def _fail(self, exc: Exception, plan: _Plan, tier: int, reason: str) -> ConverseResponse:
+        if isinstance(exc, _DeadlineExceeded):
+            log.warning("model call skipped: deadline")
+            reason += ":deadline"
+        else:
             detail = str(exc.__cause__ or exc)[:500]
             log.warning("model call failed: %s: %s", getattr(exc, "kind", type(exc).__name__), detail)
-            return self._respond(ERROR_LINE, cid, req, tier, self._model(tier), reason, "error", len(text))
+        return self._respond(ERROR_LINE, plan.cid, plan.req, tier, self._model(tier), reason, "error", plan.chars)
 
+    def _finish(self, plan: _Plan, tier: int, reason: str, result: ProviderResult) -> ConverseResponse:
+        cid, req, chars = plan.cid, plan.req, plan.chars
         if result.stop_reason == "refusal":
-            return self._respond(REFUSAL_LINE, cid, req, tier, result.model, reason, "refusal", len(text),
-                                 log_it=False)
+            return self._respond(REFUSAL_LINE, cid, req, tier, result.model, reason, "refusal", chars, log_it=False)
         if not result.text.strip():
-            return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error",
-                                 len(text))
+            return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error", chars)
         with self._lock:
             conv = self._convs.get(cid)
             if conv is not None:
-                conv.history = messages + [{"role": "assistant", "content": result.content}]
+                conv.history = plan.messages + [{"role": "assistant", "content": result.content}]
                 conv.last_ts = self._clock()
                 conv.tier = tier
         speech = result.text
         return ConverseResponse(speech, cid, speech.rstrip().endswith("?"))
+
+    def _stream(self, req: ConverseRequest, st: _StreamState) -> Iterator[str]:
+        """Yields spoken text pieces; sets st.cid / st.cont / st.model_text."""
+        plan = self._plan(req)
+        if isinstance(plan, ConverseResponse):
+            st.cid = plan.conversation_id
+            yield plan.speech
+            return
+        st.cid = plan.cid
+        tier, reason = plan.tier, plan.reason
+        if tier == 1:
+            try:
+                result = self._tier1(plan)
+            except Exception as exc:
+                yield self._fail(exc, plan, 1, reason).speech
+                return
+            if not self._escalated(result):
+                resp = self._finish(plan, 1, reason, result)
+                st.cont = resp.continue_conversation
+                yield resp.speech
+                return
+            tier, reason = 2, "escalated"
+        yield self._fillers.pick(req.device_id) + " "
+        try:
+            result = yield from self._stream_call(plan, tier, reason, st)
+        except Exception as exc:
+            resp = self._fail(exc, plan, tier, reason)
+            yield LOST_LINE if st.model_text else resp.speech
+            return
+        resp = self._finish(plan, tier, reason, result)
+        st.cont = resp.continue_conversation
+        if st.model_text and resp.speech != result.text:
+            st.cont = False  # refusal/empty after partial speech: nothing was committed to history
+            yield LOST_LINE
+        elif not st.model_text:
+            yield resp.speech
+
+    def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
+        """One streamed model call (no tools), logged. Returns the ProviderResult."""
+        model = self._model(tier)
+        effort = self._s.tier1_effort if tier == 1 else self._s.tier2_effort
+        remaining = TOTAL_BUDGET_S - (self._clock() - plan.now).total_seconds()  # deadline: first token
+        if remaining < MIN_CALL_S:
+            raise _DeadlineExceeded()
+        call_start = time.monotonic()
+        gen = self._provider.stream(
+            model=model, system=plan.system, messages=plan.messages, tools=[], effort=effort, max_tokens=1024,
+            timeout=max(MIN_CALL_S, remaining),
+        )
+        first_ms = None
+        result: ProviderResult | None = None
+        try:
+            while True:
+                try:
+                    delta = next(gen)
+                except StopIteration as stop:
+                    result = stop.value
+                    break
+                if not delta:
+                    continue
+                if first_ms is None:
+                    first_ms = int((time.monotonic() - plan.mono0) * 1000)
+                st.model_text = True
+                yield delta
+        finally:
+            gen.close()  # stops provider billing if we were closed early
+        latency = int((time.monotonic() - call_start) * 1000)
+        outcome = "refusal" if result.stop_reason == "refusal" else "ok"
+        self._log(plan.cid, plan.req, tier, result.model or model, reason, result.usage, latency, outcome,
+                  plan.chars, requested=model, first_token_ms=first_ms)
+        return result
 
     def _model(self, tier: int) -> str:
         return self._s.tier1_model if tier == 1 else self._s.tier2_model
@@ -150,19 +292,20 @@ class Engine:
             timeout=max(MIN_CALL_S, remaining),
         )
         latency = int((time.monotonic() - start) * 1000)
-        escalated = any(n == ESCALATE_TOOL.name for n, _ in result.tool_calls)
+        escalated = self._escalated(result)
         outcome = "refusal" if result.stop_reason == "refusal" else "ok"
         self._log(cid, req, tier, result.model or model, "escalated" if escalated else reason, result.usage, latency,
                   outcome, chars, requested=model)
         return result
 
-    def _log(self, cid, req, tier, model, reason, usage: Usage, latency, outcome, chars, requested=None) -> None:
+    def _log(self, cid, req, tier, model, reason, usage: Usage, latency, outcome, chars, requested=None,
+             first_token_ms=None) -> None:
         price = self._price(model, requested)
         cost = cost_usd(price, usage) if price else 0.0
         self._store.log(RequestRecord(
             ts_utc=self._clock(), conversation_id=cid, device_id=req.device_id, tier=tier, model=model,
             route_reason=reason, usage=usage, cost_usd=cost, latency_ms=latency, outcome=outcome,
-            text_chars=chars,
+            text_chars=chars, first_token_ms=first_token_ms,
         ))
 
     def _price(self, model, requested):

@@ -14,9 +14,33 @@ def make_result(text="Hello there.", model="claude-haiku-5-5", stop_reason="end_
 class FakeProvider:
     """Scripted results (or exceptions); records each call's kwargs (messages are snapshotted)."""
 
-    def __init__(self, *results):
+    def __init__(self, *results, streams=()):
         self.results = list(results)
         self.calls = []
+        self.streams = list(streams)  # each: (deltas, ProviderResult | Exception raised after the deltas)
+        self.stream_calls = []
+        self.stream_closed = []
+        self.stream_yielded = []
+
+    def stream(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None):
+        self.stream_calls.append(dict(model=model, system=system, messages=[dict(m) for m in messages],
+                                      tools=tools, effort=effort, max_tokens=max_tokens, timeout=timeout))
+        deltas, outcome = self.streams.pop(0) if self.streams else (["Hi."], make_result("Hi.", model=model))
+        idx = len(self.stream_closed)
+        self.stream_closed.append(False)
+        self.stream_yielded.append(0)
+        return self._gen(idx, deltas, outcome)
+
+    def _gen(self, idx, deltas, outcome):
+        try:
+            for d in deltas:
+                self.stream_yielded[idx] += 1
+                yield d
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        finally:
+            self.stream_closed[idx] = True
 
     def complete(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None):
         self.calls.append(dict(model=model, system=system, messages=[dict(m) for m in messages],

@@ -210,3 +210,106 @@ def test_build_client_no_retries():
     from destiny_brain.providers.anthropic_provider import build_client
     c = build_client("k")
     assert c.max_retries == 0 and c.timeout == 6.0
+
+
+# ---- streaming ----
+
+
+class FakeStream:
+    def __init__(self, deltas, final, exc=None):
+        self.text_stream = self._gen(deltas, exc)
+        self._final = final
+        self.closed = False
+
+    def _gen(self, deltas, exc):
+        for d in deltas:
+            yield d
+        if exc:
+            raise exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.closed = True
+
+    def get_final_message(self):
+        return self._final
+
+
+class FakeStreamClient:
+    def __init__(self, deltas, final=None, exc=None):
+        self.calls = []
+        self.last = None
+        outer = self
+
+        class Msgs:
+            def stream(self, **kw):
+                outer.calls.append(kw)
+                outer.last = FakeStream(deltas, final or make_response(), exc)
+                return outer.last
+
+        self.beta = NS(messages=Msgs())
+
+
+def run_stream(client, model="claude-haiku-5-5", tools=()):
+    return AnthropicProvider(client).stream(
+        model=model, system=SYSTEM, messages=MSGS, tools=list(tools), effort="low"
+    )
+
+
+def drain(gen):
+    out = []
+    while True:
+        try:
+            out.append(next(gen))
+        except StopIteration as stop:
+            return out, stop.value
+
+
+def test_stream_kwargs_match_complete_per_model():
+    tool = ToolSpec("t", "d", {"type": "object"})
+    for model in ("claude-haiku-5-5", "claude-sonnet-5-5"):
+        c = FakeClient()
+        run(c, model=model, tools=[tool])
+        sc = FakeStreamClient(["a"])
+        drain(run_stream(sc, model=model, tools=[tool]))
+        assert sc.calls[0] == c.calls[0][1]
+    assert sc.calls[0]["fallbacks"] == "default"
+
+
+def test_stream_yields_deltas_and_returns_result():
+    final = make_response(
+        blocks=[{"type": "text", "text": "Hi there."}],
+        usage=NS(
+            input_tokens=7,
+            output_tokens=3,
+            cache_read_input_tokens=2,
+            cache_creation_input_tokens=1,
+        ),
+        stop="end_turn",
+        model="mm",
+    )
+    deltas, res = drain(run_stream(FakeStreamClient(["Hi ", "there."], final)))
+    assert deltas == ["Hi ", "there."]
+    assert res.content == [{"type": "text", "text": "Hi there."}]
+    assert res.text == "Hi there."
+    assert res.usage == Usage(7, 3, 2, 1)
+    assert res.model == "mm" and res.stop_reason == "end_turn"
+
+
+def test_stream_error_mid_stream_maps():
+    exc = anthropic.APIConnectionError(request=httpx.Request("POST", "http://x"))
+    gen = run_stream(FakeStreamClient(["a"], exc=exc))
+    assert next(gen) == "a"
+    with pytest.raises(ProviderError) as ei:
+        next(gen)
+    assert ei.value.kind == "connection"
+
+
+def test_stream_close_exits_context():
+    sc = FakeStreamClient(["a", "b", "c"])
+    gen = run_stream(sc)
+    assert next(gen) == "a"
+    gen.close()
+    assert sc.last.closed

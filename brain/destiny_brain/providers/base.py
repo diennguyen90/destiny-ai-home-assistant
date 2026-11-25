@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import Protocol
 
 from ..costs import Usage
@@ -43,3 +44,17 @@ class ChatProvider(Protocol):
         max_tokens: int = 1024,
         timeout: float | None = None,
     ) -> ProviderResult: ...
+
+    def stream(
+        self,
+        *,
+        model: str,
+        system: list[dict],
+        messages: list[dict],
+        tools: list[ToolSpec],
+        effort: str,
+        max_tokens: int = 1024,
+        timeout: float | None = None,
+    ) -> Iterator[str]:
+        """Yield text deltas; the generator's return value is a ProviderResult."""
+        ...

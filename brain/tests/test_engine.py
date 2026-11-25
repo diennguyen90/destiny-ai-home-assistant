@@ -371,3 +371,187 @@ def test_ha_notify():
         raise httpx.ConnectError("x")
 
     assert ha_client(boom).notify("s", "t", "m") is False
+
+
+# -- handle_stream --
+
+from destiny_brain.fillers import FILLERS  # noqa: E402
+
+LOST = " Sorry, I lost my train of thought."
+
+
+class FixedFillers:
+    def pick(self, device_id):
+        return FILLERS[0]
+
+
+def sbuild(env, *results, streams=()):
+    settings, store = env
+    provider = FakeProvider(*results, streams=streams)
+    clock = Clock()
+    e = Engine(settings, store, provider, FakeHA(), clock=clock, fillers=FixedFillers())
+    return e, provider, store, clock
+
+
+def run(e, r):
+    events = list(e.handle_stream(r))
+    assert events[-1]["type"] == "end" and all(x["type"] == "delta" for x in events[:-1])
+    return [x["text"] for x in events[:-1]], events[-1]
+
+
+def test_stream_tier1_single_delta_no_filler(env):
+    e, p, *_ = sbuild(env, make_result("It is four."))
+    deltas, end = run(e, req("what is two plus two"))
+    assert deltas == ["It is four."]
+    assert end["speech"] == "It is four." and end["continue_conversation"] is False
+    assert p.stream_calls == []
+
+
+def test_stream_tier2_filler_then_deltas(env):
+    res = make_result("Because light scatters.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[(["Because ", "light scatters."], res)])
+    deltas, end = run(e, req("explain the water cycle"))
+    assert deltas == [FILLERS[0] + " ", "Because ", "light scatters."]
+    assert p.stream_calls[0]["model"] == "claude-sonnet-5-5" and p.stream_calls[0]["tools"] == []
+    assert p.calls == []
+
+
+def test_stream_escalation_filler_then_sonnet(env):
+    esc = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    res = make_result("Deep answer.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, esc, streams=[(["Deep answer."], res)])
+    deltas, end = run(e, req("what is a black hole"))
+    assert deltas == [FILLERS[0] + " ", "Deep answer."]
+    assert p.calls[0]["model"] == "claude-haiku-5-5" and p.stream_calls[0]["model"] == "claude-sonnet-5-5"
+    assert p.calls[0]["messages"] == p.stream_calls[0]["messages"]
+    assert len(store.recent()) == 2
+
+
+def test_stream_history_excludes_filler(env):
+    res = make_result("Because.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[(["Because."], res),
+                                    (["Sure."], make_result("Sure.", model="claude-sonnet-5-5"))])
+    _, end = run(e, req("explain the water cycle"))
+    run(e, req("and then", end["conversation_id"]))
+    msgs = p.stream_calls[1]["messages"]
+    assert msgs[2] == {"role": "assistant", "content": res.content}
+    assert FILLERS[0] not in json.dumps(msgs)
+
+
+def test_stream_end_speech_is_full_text(env):
+    res = make_result("Want more?", model="claude-sonnet-5-5")
+    e, *_ = sbuild(env, streams=[(["Want ", "more?"], res)])
+    deltas, end = run(e, req("explain the water cycle"))
+    assert end["speech"] == "".join(deltas) == FILLERS[0] + " Want more?"
+    assert end["continue_conversation"] is True and len(end["conversation_id"]) == 32
+
+
+def test_stream_midstream_failure_lost_line_no_history(env):
+    e, p, store, _ = sbuild(env, streams=[(["Partial "], ProviderError("connection")),
+                                          (["Ok."], make_result("Ok.", model="claude-sonnet-5-5"))])
+    deltas, end = run(e, req("explain the water cycle", "c1"))
+    assert deltas == [FILLERS[0] + " ", "Partial ", LOST]
+    assert end["speech"].endswith(LOST) and end["continue_conversation"] is False
+    assert store.recent()[0].outcome == "error"
+    run(e, req("explain it again", "c1"))
+    assert [m["role"] for m in p.stream_calls[1]["messages"]] == ["user", "system"]
+
+
+def test_stream_failure_before_first_token_error_line(env):
+    e, *_ = sbuild(env, streams=[([], ProviderError("timeout"))])
+    deltas, end = run(e, req("explain the water cycle"))
+    assert deltas == [FILLERS[0] + " ", ERROR]
+
+
+def test_stream_refusal_after_filler(env):
+    res = make_result("", model="claude-sonnet-5-5", stop_reason="refusal")
+    e, p, store, _ = sbuild(env, streams=[([], res)])
+    deltas, end = run(e, req("explain the water cycle", "c2"))
+    assert deltas == [FILLERS[0] + " ", REFUSAL]
+    assert end["continue_conversation"] is False
+
+
+def test_stream_empty_hard_cap_soft_cap_paths(env):
+    e, p, store, clock = sbuild(env)
+    deltas, end = run(e, req("   "))
+    assert deltas == [EMPTY] and end["speech"] == EMPTY and end["continue_conversation"] is False
+    spend(store, 3.0)
+    deltas, end = run(e, req("explain the water cycle"))
+    assert deltas == [CAPPED] and p.calls == [] and p.stream_calls == []
+
+
+def test_stream_soft_cap_downgrades_to_tier1_blocking(env):
+    e, p, store, _ = sbuild(env, make_result("Short."))
+    spend(store, env[0].soft_cap_usd + 0.01)
+    deltas, end = run(e, req("explain the water cycle"))
+    assert deltas == ["Short."] and p.stream_calls == []
+
+
+def test_stream_logs_first_token_ms(env):
+    res = make_result("Because.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, streams=[(["Because."], res)])
+    run(e, req("explain the water cycle"))
+    rec = store.recent()[0]
+    assert rec.tier == 2 and rec.outcome == "ok" and rec.first_token_ms is not None and rec.first_token_ms >= 0
+    e2, p2, store2, _ = sbuild(env, make_result("Hi."))
+    run(e2, req("hello"))
+    assert store2.recent()[0].first_token_ms is None
+
+
+def test_stream_deadline_skips_call(env):
+    e, p, store, clock = sbuild(env)
+    calls = {"n": 0}
+
+    def late():
+        calls["n"] += 1
+        return T0 if calls["n"] <= 1 else T0 + timedelta(seconds=14)
+    e._clock = late
+    deltas, end = run(e, req("explain the water cycle"))
+    assert deltas[-1] == ERROR and p.stream_calls == []
+
+
+def test_stream_generator_close_stops_provider(env):
+    res = make_result("One two three.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, streams=[(["One ", "two ", "three."], res)])
+    g = e.handle_stream(req("explain the water cycle"))
+    assert next(g)["type"] == "delta"      # filler
+    assert next(g)["text"] == "One "
+    g.close()
+    assert p.stream_closed == [True] and p.stream_yielded == [1]
+
+
+def test_stream_refusal_after_partial_text_uses_lost_line(env):
+    res = make_result("Partial", model="claude-sonnet-5-5", stop_reason="refusal")
+    e, p, store, _ = sbuild(env, streams=[(["Partial"], res), (["Ok."], make_result("Ok.", model="claude-sonnet-5-5"))])
+    deltas, end = run(e, req("explain the water cycle", "c3"))
+    assert deltas == [FILLERS[0] + " ", "Partial", LOST]
+    assert end["continue_conversation"] is False
+    run(e, req("explain more", "c3"))
+    assert [m["role"] for m in p.stream_calls[1]["messages"]] == ["user", "system"]
+
+
+def test_stream_latency_measures_call_only(env, monkeypatch):
+    import itertools
+    from destiny_brain import engine as eng
+    ticks = itertools.chain([100.0, 110.0, 111.0, 112.0], itertools.repeat(112.0))
+    monkeypatch.setattr(eng.time, "monotonic", lambda: next(ticks))
+    res = make_result("Because.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, streams=[(["Because."], res)])
+    run(e, req("explain the water cycle"))
+    rec = store.recent()[0]
+    assert rec.first_token_ms == 11000 and rec.latency_ms == 2000
+
+
+def test_stream_unexpected_error_is_logged_and_log_failure_is_safe(env):
+    e, p, store, _ = sbuild(env)
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    e._resolve = boom
+    deltas, end = run(e, req("hello"))
+    assert deltas == [ERROR] and end["speech"] == ERROR
+    rec = store.recent()[0]
+    assert rec.outcome == "error" and rec.route_reason == "unexpected"
+    e._log = boom
+    deltas, end = run(e, req("hello"))
+    assert deltas == [ERROR]
