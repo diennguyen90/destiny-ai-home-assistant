@@ -55,3 +55,6 @@ def test_pick_kinds_independent():
         assert x in WEB_FILLERS
         assert x not in picks[max(0, i - 5):i]
     assert p.pick("d1") in FILLERS
+    assert set(p._history) == {("d1", "web"), ("d1", "normal")}
+    assert all(x in WEB_FILLERS for x in p._history[("d1", "web")])
+    assert all(x in FILLERS for x in p._history[("d1", "normal")])

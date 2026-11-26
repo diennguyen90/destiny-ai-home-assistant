@@ -78,3 +78,18 @@ def test_weather_questions_not_live(text):
 )
 def test_live_word_boundaries(text):
     assert route(text, None).reason != "live"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what day is it today",
+        "what are you doing right now",
+        "I'm playing Minecraft",
+        "I lost my tooth",
+        "what games should we play",
+        "what's the current time",
+    ],
+)
+def test_generic_words_not_live(text):
+    assert route(text, None).reason != "live"
