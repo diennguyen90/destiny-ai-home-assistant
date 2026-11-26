@@ -27,20 +27,38 @@ FILLERS: tuple[str, ...] = (
     "Ooh, let me think, I want to give you a proper answer on that.",
 )
 
+# Spoken instead of FILLERS when a question needs a web search. Same 61-character minimum.
+WEB_FILLERS: tuple[str, ...] = (
+    "One sec, I'm surfing through the web to find that out for you.",
+    "Ooh, let me hop on the internet real quick and check on that one.",
+    "Hang on, I'm zooming around the web to dig up the latest for you.",
+    "Give me a moment, I'm riding the information superhighway for you.",
+    "Okay, let me go ask the internet about that, back in just a sec.",
+    "Hold tight, I'm scouring the web to get you a fresh answer on that.",
+    "Let me look that up online real quick, I'll be right back with it.",
+    "One moment, I'm diving into the web to see what's happening now.",
+    "Ooh, good one, let me search the internet and see what I can find.",
+    "Just a sec, my web surfboard is out and I'm hunting for your answer.",
+    "Alright, let me peek at the internet for the newest word on that.",
+    "Hang tight, I'm checking the web so I can give you the latest news.",
+)
+
 
 class FillerPicker:
-    """Random filler per device, never repeating among that device's last `recent` picks."""
+    """Random filler per device and kind, never repeating among the last `recent` picks."""
 
     def __init__(self, recent: int = 5):
         self._recent = recent
-        self._history: dict[str, deque[str]] = {}
+        self._history: dict[tuple[str, str], deque[str]] = {}
         self._lock = threading.Lock()
 
-    def pick(self, device_id: str | None) -> str:
-        key = device_id or "_"
+    def pick(self, device_id: str | None, kind: str = "normal") -> str:
+        """kind is "normal" (FILLERS) or "web" (WEB_FILLERS)."""
+        pool = WEB_FILLERS if kind == "web" else FILLERS
+        key = (device_id or "_", kind)
         with self._lock:
             hist = self._history.setdefault(key, deque(maxlen=self._recent))
-            choices = [f for f in FILLERS if f not in hist] or list(FILLERS)
+            choices = [f for f in pool if f not in hist] or list(pool)
             choice = random.choice(choices)
             hist.append(choice)
             return choice

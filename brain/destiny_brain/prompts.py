@@ -11,12 +11,31 @@ DESTINY_BASE = (
     "When someone is learning or doing homework, be a tutor: don't just give the answer; give a hint "
     "or ask a small question and let them try first. If the person sounds like a child, use simple "
     "words and everyday examples. If you are unsure or something may be out of date, say so. Always "
-    "keep it family-friendly. If asked, say you are an AI."
+    "keep it family-friendly. If asked, say you are an AI. "
+    "When someone says our team or the game, they mean the 49ers or the Nuggets unless another team "
+    "is named. Say times in Pacific time. When you use web search results, give a short spoken answer "
+    "with no links, URLs, citations or source lists; it is fine to say according to ESPN now and then. "
+    "If a search finds nothing current, say so briefly instead of guessing. Keep search results "
+    "family-friendly, and decline or soften adult or violent news when talking with a child."
 )
+
+WEB_SEARCH_TOOL: dict = {
+    "type": "web_search_20260209",
+    "name": "web_search",
+    "max_uses": 3,
+    "user_location": {
+        "type": "approximate",
+        "region": "California",
+        "country": "US",
+        "timezone": "America/Los_Angeles",
+    },
+}
 
 ESCALATE_TOOL = ToolSpec(
     "needs_deeper_answer",
-    "Call this instead of answering when the question needs a careful, multi-step or teaching explanation.",
+    "Call this instead of answering when the question needs a careful, multi-step or teaching "
+    "explanation, or when the question needs current or live information from the internet "
+    "(news, sports, schedules, prices, recent events).",
     {
         "type": "object",
         "properties": {"reason": {"type": "string"}},

@@ -33,3 +33,48 @@ def test_clean_text_truncates():
 
 def test_clean_text_keeps_unicode():
     assert clean_text("¿Qué tal? 🚗") == "¿Qué tal? 🚗"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "do the nuggets play tonight",
+        "who won the 49ers game",
+        "what's in the news today",
+        "what time is the niners game",
+        "latest score",
+    ],
+)
+def test_live_words_route_tier2(text):
+    d = route(text, None)
+    assert (d.tier, d.reason) == (2, "live")
+
+
+def test_live_sticky_wins():
+    assert route("do the nuggets play tonight", 2).reason == "sticky"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what's the weather tomorrow",
+        "is it going to rain today",
+        "how hot is it right now",
+        "what's the forecast this weekend",
+    ],
+)
+def test_weather_questions_not_live(text):
+    assert route(text, None).reason != "live"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I wonder why cats purr",
+        "open the windows",
+        "currently learning fractions",
+        "let's go to the playground",
+    ],
+)
+def test_live_word_boundaries(text):
+    assert route(text, None).reason != "live"
