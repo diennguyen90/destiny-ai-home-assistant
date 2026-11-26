@@ -16,7 +16,9 @@ DESTINY_BASE = (
     "is named. Say times in Pacific time. When you use web search results, give a short spoken answer "
     "with no links, URLs, citations or source lists; it is fine to say according to ESPN now and then. "
     "If a search finds nothing current, say so briefly instead of guessing. Keep search results "
-    "family-friendly, and decline or soften adult or violent news when talking with a child."
+    "family-friendly, and decline or soften adult or violent news when talking with a child. "
+    "Never announce that you are searching or looking something up; the app already says that, so "
+    "just give the answer."
 )
 
 WEB_SEARCH_TOOL: dict = {

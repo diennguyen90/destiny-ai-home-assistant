@@ -21,11 +21,13 @@ KEYWORDS = (
     "homework",
 )
 
-# A strong term alone means live info; a time word needs an event word alongside it.
-LIVE_STRONG_RE = re.compile(
-    r"\b(?:news|headlines|scores?|standings|latest|price of|stock price|open now"
-    r"|49ers|niners|nuggets)\b"
-)
+# Team names and strong terms always mean live info; generic terms and a time word plus an event
+# word only count when the speaker is not talking about themselves ("I won my game today").
+LIVE_TEAM_RE = re.compile(r"\b(?:49ers|niners|nuggets)\b")
+LIVE_STRONG_RE = re.compile(r"\b(?:standings|price of|stock price|open now)\b")
+LIVE_GENERIC_RE = re.compile(r"\b(?:news|headlines|scores?|latest)\b")
+FIRST_PERSON_RE = re.compile(r"\b(?:i|we|my|me|us)\b")
+CHICKEN_NUGGETS_RE = re.compile(r"\bchicken nuggets\b")
 LIVE_TIME_RE = re.compile(
     r"\b(?:today|tonight|tomorrow|yesterday|last night|this week|this weekend|right now)\b"
 )
@@ -50,7 +52,11 @@ def clean_text(text: str) -> str:
 
 
 def _is_live(lowered: str) -> bool:
-    return bool(LIVE_STRONG_RE.search(lowered)) or bool(
+    if LIVE_TEAM_RE.search(CHICKEN_NUGGETS_RE.sub(" ", lowered)) or LIVE_STRONG_RE.search(lowered):
+        return True
+    if FIRST_PERSON_RE.search(lowered):
+        return False
+    return bool(LIVE_GENERIC_RE.search(lowered)) or bool(
         LIVE_TIME_RE.search(lowered) and LIVE_EVENT_RE.search(lowered)
     )
 

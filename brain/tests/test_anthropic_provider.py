@@ -7,7 +7,7 @@ import pytest
 from destiny_brain.costs import Usage
 from destiny_brain.providers.anthropic_provider import AnthropicProvider
 from destiny_brain.prompts import WEB_SEARCH_TOOL
-from destiny_brain.providers.base import SEARCH_STARTED, ProviderError, ToolSpec
+from destiny_brain.providers.base import HEARTBEAT, SEARCH_STARTED, ProviderError, ToolSpec
 
 
 def make_response(blocks=None, usage=None, stop="end_turn", model="m"):
@@ -359,7 +359,7 @@ def test_stream_yields_search_started():
     gen = AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
                                        tools=[], effort="low", server_tools=[WEB_SEARCH_TOOL])
     deltas, _ = drain(gen)
-    assert deltas == [SEARCH_STARTED, "Tonight", " at 7."]
+    assert [d for d in deltas if d is not HEARTBEAT] == [SEARCH_STARTED, "Tonight", " at 7."]
     assert sc.calls[0]["tools"] == [WEB_SEARCH_TOOL]
 
 
@@ -377,3 +377,77 @@ def test_missing_server_tool_use_is_zero_searches():
     assert run(FakeClient()).usage.web_search_requests == 0
     usage = NS(input_tokens=1, output_tokens=1, server_tool_use=None)
     assert run(FakeClient(response=make_response(usage=usage))).usage.web_search_requests == 0
+
+
+# ---- seams and heartbeats ----
+
+
+def _txt(t):
+    return {"type": "text", "text": t}
+
+
+def _srv():
+    return {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {}}
+
+
+def _res():
+    return {"type": "web_search_tool_result", "tool_use_id": "s1", "content": []}
+
+
+def _text_of(blocks):
+    return run(FakeClient(response=make_response(blocks=blocks))).text
+
+
+def test_seam_inserts_space_across_non_text_blocks():
+    assert _text_of([_txt("I'll look that up."), _srv(), _res(), _txt("The Nuggets win.")]) ==         "I'll look that up. The Nuggets win."
+
+
+def test_seam_no_extra_space_when_whitespace_present():
+    assert _text_of([_txt("Up. "), _srv(), _txt("The")]) == "Up. The"
+    assert _text_of([_txt("Up."), _srv(), _txt(" The")]) == "Up. The"
+
+
+def test_seam_adjacent_text_blocks_join_with_nothing():
+    assert _text_of([_txt("a"), _txt("b"), _srv(), _txt("c")]) == "ab c"
+
+
+def test_seam_leading_non_text_adds_nothing():
+    assert _text_of([_srv(), _res(), _txt("Hi.")]) == "Hi."
+
+
+def test_stream_seam_space_after_non_text_block():
+    sc = FakeStreamClient([TEXT_BLOCK_START, "I'll look.", SERVER_BLOCK_START, TEXT_BLOCK_START, "Win."])
+    deltas, _ = drain(AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                                   tools=[], effort="low", server_tools=[WEB_SEARCH_TOOL]))
+    text = [d for d in deltas if isinstance(d, str)]
+    assert "".join(text) == "I'll look. Win."
+
+
+def test_stream_seam_no_space_when_already_whitespace():
+    sc = FakeStreamClient([TEXT_BLOCK_START, "Look. ", SERVER_BLOCK_START, TEXT_BLOCK_START, "Win."])
+    deltas, _ = drain(AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                                   tools=[], effort="low"))
+    assert "".join(d for d in deltas if isinstance(d, str)) == "Look. Win."
+
+
+def test_stream_no_seam_space_before_any_text_or_between_adjacent_text():
+    sc = FakeStreamClient([SERVER_BLOCK_START, TEXT_BLOCK_START, "A", TEXT_BLOCK_START, "B"])
+    deltas, _ = drain(AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                                   tools=[], effort="low"))
+    assert "".join(d for d in deltas if isinstance(d, str)) == "AB"
+
+
+def test_stream_heartbeats_for_non_text_events():
+    other = [NS(type="message_start"), NS(type="content_block_stop"), NS(type="message_delta"),
+             NS(type="content_block_delta", delta=NS(type="input_json_delta"))]
+    sc = FakeStreamClient([other[0], TEXT_BLOCK_START, "Hi", *other[1:], SERVER_BLOCK_START])
+    deltas, _ = drain(AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                                   tools=[], effort="low"))
+    assert deltas == [HEARTBEAT, HEARTBEAT, "Hi", HEARTBEAT, HEARTBEAT, HEARTBEAT, SEARCH_STARTED]
+
+
+def test_stream_synthetic_sdk_events_are_not_heartbeats():
+    sc = FakeStreamClient([NS(type="text", text="x"), "x"])
+    deltas, _ = drain(AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                                   tools=[], effort="low"))
+    assert deltas == ["x"]

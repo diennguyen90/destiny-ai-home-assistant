@@ -29,6 +29,7 @@ class FakeEngine:
     def handle_stream(self, req):
         self.reqs.append(req)
         yield {"type": "delta", "text": "Hi é "}
+        yield {"type": "ping"}
         yield {"type": "delta", "text": "there"}
         yield {"type": "end", "speech": "Hi é there", "conversation_id": "c1", "continue_conversation": True}
 
@@ -110,7 +111,7 @@ def test_stream_ndjson(tmp_path):
     assert r.headers["content-type"].startswith("application/x-ndjson")
     assert r.text.endswith("\n")
     events = [json.loads(line) for line in r.text.splitlines()]
-    assert [e["type"] for e in events] == ["delta", "delta", "end"]
+    assert [e["type"] for e in events] == ["delta", "ping", "delta", "end"]
     assert events[0]["text"] == "Hi é "
     assert "é" in r.text  # ensure_ascii=False
     assert events[-1] == {"type": "end", "speech": "Hi é there", "conversation_id": "c1",

@@ -22,3 +22,7 @@ def test_web_search_tool_verbatim():
             "timezone": "America/Los_Angeles",
         },
     }
+
+
+def test_prompt_says_not_to_announce_searching():
+    assert "announce" in DESTINY_BASE and "searching" in DESTINY_BASE

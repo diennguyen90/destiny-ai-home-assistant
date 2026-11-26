@@ -16,6 +16,15 @@ class _SearchStarted:
 SEARCH_STARTED = _SearchStarted()
 
 
+class _Heartbeat:
+    def __repr__(self) -> str:
+        return "HEARTBEAT"
+
+
+# Yielded by ChatProvider.stream() for every raw stream event that carries no speech (keep-alive only).
+HEARTBEAT = _Heartbeat()
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -66,6 +75,6 @@ class ChatProvider(Protocol):
         max_tokens: int = 1024,
         timeout: float | None = None,
         server_tools: list[dict] | None = None,
-    ) -> Iterator[str | _SearchStarted]:
-        """Yield text deltas (and SEARCH_STARTED); the generator's return value is a ProviderResult."""
+    ) -> Iterator[str | _SearchStarted | _Heartbeat]:
+        """Yield text deltas (plus SEARCH_STARTED and HEARTBEAT); the generator's return value is a ProviderResult."""
         ...

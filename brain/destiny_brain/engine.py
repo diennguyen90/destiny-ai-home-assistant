@@ -13,7 +13,7 @@ from .config import Settings
 from .fillers import FillerPicker
 from .costs import Usage, cost_usd
 from .prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL, context_block
-from .providers.base import SEARCH_STARTED, ProviderResult
+from .providers.base import HEARTBEAT, SEARCH_STARTED, ProviderResult
 from .router import clean_text, route
 from .store import RequestRecord
 
@@ -25,6 +25,8 @@ ERROR_LINE = "Sorry, something went wrong in my head. Please try again."
 REFUSAL_LINE = "I can't help with that one. Let's ask a grown-up."
 LOST_LINE = " Sorry, I lost my train of thought."
 WEB_LINE = " Let me check the web real quick."
+# Spoken on the 2nd and 3rd search of one answer (before any model text) so the line never goes silent.
+BRIDGES = (" Still digging, almost there.", " Just a little longer, I'm nearly there.")
 
 MAX_TURNS = 12  # complete [user, system, assistant] turns kept before a fresh start
 MAX_CONVERSATION_ID = 128
@@ -72,6 +74,10 @@ class _StreamState:
     cont: bool = False
     model_text: bool = False
     web_line: bool = False
+    searches: int = 0
+    bridges: int = 0
+    last_text: str = ""
+    seam_pending: bool = False
     spoken: list[str] = field(default_factory=list)
 
 
@@ -109,11 +115,14 @@ class Engine:
                 return ConverseResponse(ERROR_LINE, cid or uuid.uuid4().hex, False)
 
     def handle_stream(self, req: ConverseRequest) -> Iterator[dict]:
-        """NDJSON event dicts: `delta` events, then exactly one `end`. Never raises."""
+        """NDJSON event dicts: `delta` and `ping` events, then exactly one `end`. Never raises."""
         st = _StreamState(req.conversation_id or "")
         inner = self._stream(req, st)
         try:
             for text in inner:
+                if text is HEARTBEAT:
+                    yield {"type": "ping"}
+                    continue
                 st.spoken.append(text)
                 yield {"type": "delta", "text": text}
         except Exception:
@@ -146,7 +155,9 @@ class Engine:
 
         decision = route(text, previous_tier)
         tier, reason = decision.tier, decision.reason
-        if tier == 2 and self._store.spend_today(now) >= self._s.soft_cap_usd:
+        if (tier == 2 and self._store.spend_today(now) >= self._s.soft_cap_usd
+                and not self._has_server_blocks(history)):
+            # (a history with server-tool blocks must stay on tier 2: Haiku has no web search tool)
             tier, reason = 1, "soft_cap"
             self._notify_soft_cap(now)
 
@@ -156,6 +167,14 @@ class Engine:
                               {"role": "system", "content": self._context(now)}]
         system = [{"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}}]
         return _Plan(cid, req, len(text), tier, reason, messages, system, now, time.monotonic())
+
+    @staticmethod
+    def _has_server_blocks(history: list[dict]) -> bool:
+        return any(
+            isinstance(b, dict) and b.get("type") in ("server_tool_use", "web_search_tool_result")
+            for m in history if m.get("role") == "assistant" and isinstance(m.get("content"), list)
+            for b in m["content"]
+        )
 
     def _handle(self, req: ConverseRequest) -> ConverseResponse:
         plan = self._plan(req)
@@ -197,7 +216,9 @@ class Engine:
         usage = Usage(a.input_tokens + b.input_tokens, a.output_tokens + b.output_tokens,
                       a.cache_read_tokens + b.cache_read_tokens, a.cache_write_tokens + b.cache_write_tokens,
                       a.web_search_requests + b.web_search_requests)
-        return replace(second, text=first.text + second.text, content=first.content + second.content,
+        a_txt, b_txt = first.text, second.text
+        seam = " " if a_txt and b_txt and not a_txt[-1].isspace() and not b_txt[0].isspace() else ""
+        return replace(second, text=a_txt + seam + b_txt, content=first.content + second.content,
                        usage=usage, tool_calls=first.tool_calls + second.tool_calls)
 
     @staticmethod
@@ -277,6 +298,7 @@ class Engine:
         first = yield from self._stream_call(plan, tier, reason, st, plan.messages)
         if first.stop_reason != "pause_turn":
             return first
+        st.seam_pending = bool(st.last_text) and not st.last_text[-1].isspace()
         try:
             second = yield from self._stream_call(plan, tier, reason, st, self._continuation(plan, first))
         except _DeadlineExceeded:
@@ -306,16 +328,30 @@ class Engine:
                 except StopIteration as stop:
                     result = stop.value
                     break
+                if delta is HEARTBEAT:
+                    yield HEARTBEAT
+                    continue
                 if delta is SEARCH_STARTED:
-                    if not st.model_text and reason != "live" and not st.web_line:
+                    st.searches += 1
+                    if st.model_text:
+                        pass
+                    elif st.searches == 1 and reason != "live" and not st.web_line:
                         st.web_line = True
                         yield WEB_LINE  # spoken, but not model text and never stored in history
+                    elif st.searches >= 2 and st.bridges < len(BRIDGES):
+                        st.bridges += 1
+                        yield BRIDGES[st.bridges - 1]  # keeps the connector's idle timer alive
                     continue
                 if not delta:
                     continue
+                if st.seam_pending:
+                    st.seam_pending = False
+                    if not delta[0].isspace():
+                        yield " "  # pause_turn continuation starts a new text block
                 if first_ms is None:
                     first_ms = int((time.monotonic() - plan.mono0) * 1000)
                 st.model_text = True
+                st.last_text = delta
                 yield delta
         finally:
             gen.close()  # stops provider billing if we were closed early

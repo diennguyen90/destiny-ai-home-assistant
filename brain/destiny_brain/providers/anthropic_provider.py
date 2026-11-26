@@ -5,7 +5,7 @@ from collections.abc import Iterator
 import anthropic
 
 from ..costs import Usage
-from .base import SEARCH_STARTED, ProviderError, ProviderResult, ToolSpec
+from .base import HEARTBEAT, SEARCH_STARTED, ProviderError, ProviderResult, ToolSpec
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 BINDING_BETA = "thinking-binding-controls-2026-08-01"
@@ -63,9 +63,25 @@ def _build_kwargs(model, system, messages, tools, effort, max_tokens, server_too
     return kwargs
 
 
+def _join_text(content: list[dict]) -> str:
+    """Join text blocks with ""; a single space at a seam that spans non-text blocks."""
+    out = ""
+    gap = False
+    for b in content:
+        if b.get("type") != "text":
+            gap = bool(out) or gap
+            continue
+        t = b["text"]
+        if gap and out and t and not out[-1].isspace() and not t[0].isspace():
+            out += " "
+        out += t
+        gap = False
+    return out
+
+
 def _to_result(resp) -> ProviderResult:
     content = [b.model_dump() for b in resp.content]
-    text = "".join(b["text"] for b in content if b.get("type") == "text")
+    text = _join_text(content)
     tool_calls = [
         (b["name"], b.get("input") or {}) for b in content if b.get("type") == "tool_use"
     ]
@@ -135,15 +151,36 @@ class AnthropicProvider:
         """
         kwargs = _build_kwargs(model, system, messages, tools, effort, max_tokens, server_tools)
         client = self._with_timeout(timeout)
+        last_text = ""  # last text yielded, to tell whether a seam needs a space
+        gap = False  # a non-text block has started since the last text
         try:
             with client.beta.messages.stream(**kwargs) as stream:
                 for event in stream:
-                    if event.type == "content_block_delta":
+                    etype = event.type
+                    if etype == "content_block_delta":
                         if event.delta.type == "text_delta":
-                            yield event.delta.text
-                    elif event.type == "content_block_start":
-                        if event.content_block.type == "server_tool_use":
+                            if event.delta.text:
+                                last_text = event.delta.text
+                                gap = False
+                                yield event.delta.text
+                        else:
+                            yield HEARTBEAT
+                    elif etype == "content_block_start":
+                        btype = event.content_block.type
+                        if btype == "server_tool_use":
+                            gap = True
                             yield SEARCH_STARTED
+                        elif btype == "text":
+                            if gap and last_text and not last_text[-1].isspace():
+                                last_text = " "
+                                yield " "
+                            gap = False
+                            yield HEARTBEAT
+                        else:
+                            gap = True
+                            yield HEARTBEAT
+                    elif etype in ("content_block_stop", "message_start", "message_delta", "message_stop"):
+                        yield HEARTBEAT
                 final = stream.get_final_message()
         except anthropic.APIError as exc:
             mapped = _map_error(exc)

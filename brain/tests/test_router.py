@@ -47,6 +47,7 @@ def test_clean_text_keeps_unicode():
         "what's the price of gold",
         "is target open now",
         "nfl standings",
+        "can we watch the nuggets tonight",
     ],
 )
 def test_live_words_route_tier2(text):
@@ -93,6 +94,12 @@ def test_live_word_boundaries(text):
         "I lost my tooth",
         "what games should we play",
         "what's the current time",
+        "can I have chicken nuggets for dinner",
+        "can we play a game today",
+        "I won my game today",
+        "I have good news",
+        "what is my score",
+        "whats the latest I can stay up",
     ],
 )
 def test_generic_words_not_live(text):
