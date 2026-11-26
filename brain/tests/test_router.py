@@ -43,6 +43,10 @@ def test_clean_text_keeps_unicode():
         "what's in the news today",
         "what time is the niners game",
         "latest score",
+        "who won the game last night",
+        "what's the price of gold",
+        "is target open now",
+        "nfl standings",
     ],
 )
 def test_live_words_route_tier2(text):
