@@ -7,6 +7,15 @@ from typing import Protocol
 from ..costs import Usage
 
 
+class _SearchStarted:
+    def __repr__(self) -> str:
+        return "SEARCH_STARTED"
+
+
+# Yielded by ChatProvider.stream() (between str text deltas) when a server-tool search begins.
+SEARCH_STARTED = _SearchStarted()
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -43,6 +52,7 @@ class ChatProvider(Protocol):
         effort: str,
         max_tokens: int = 1024,
         timeout: float | None = None,
+        server_tools: list[dict] | None = None,
     ) -> ProviderResult: ...
 
     def stream(
@@ -55,6 +65,7 @@ class ChatProvider(Protocol):
         effort: str,
         max_tokens: int = 1024,
         timeout: float | None = None,
-    ) -> Iterator[str]:
-        """Yield text deltas; the generator's return value is a ProviderResult."""
+        server_tools: list[dict] | None = None,
+    ) -> Iterator[str | _SearchStarted]:
+        """Yield text deltas (and SEARCH_STARTED); the generator's return value is a ProviderResult."""
         ...

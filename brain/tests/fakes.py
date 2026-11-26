@@ -22,9 +22,11 @@ class FakeProvider:
         self.stream_closed = []
         self.stream_yielded = []
 
-    def stream(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None):
+    def stream(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None,
+               server_tools=None):
         self.stream_calls.append(dict(model=model, system=system, messages=[dict(m) for m in messages],
-                                      tools=tools, effort=effort, max_tokens=max_tokens, timeout=timeout))
+                                      tools=tools, effort=effort, max_tokens=max_tokens, timeout=timeout,
+                                      server_tools=server_tools))
         deltas, outcome = self.streams.pop(0) if self.streams else (["Hi."], make_result("Hi.", model=model))
         idx = len(self.stream_closed)
         self.stream_closed.append(False)
@@ -42,9 +44,11 @@ class FakeProvider:
         finally:
             self.stream_closed[idx] = True
 
-    def complete(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None):
+    def complete(self, *, model, system, messages, tools, effort, max_tokens=1024, timeout=None,
+               server_tools=None):
         self.calls.append(dict(model=model, system=system, messages=[dict(m) for m in messages],
-                               tools=tools, effort=effort, max_tokens=max_tokens, timeout=timeout))
+                               tools=tools, effort=effort, max_tokens=max_tokens, timeout=timeout,
+                               server_tools=server_tools))
         r = self.results.pop(0) if self.results else make_result(model=model)
         if isinstance(r, Exception):
             raise r

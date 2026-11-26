@@ -6,7 +6,8 @@ import pytest
 
 from destiny_brain.costs import Usage
 from destiny_brain.providers.anthropic_provider import AnthropicProvider
-from destiny_brain.providers.base import ProviderError, ToolSpec
+from destiny_brain.prompts import WEB_SEARCH_TOOL
+from destiny_brain.providers.base import SEARCH_STARTED, ProviderError, ToolSpec
 
 
 def make_response(blocks=None, usage=None, stop="end_turn", model="m"):
@@ -130,7 +131,7 @@ def test_usage_mapping():
 def test_text_content_and_stop_reason():
     blocks = [{"type": "text", "text": "A."}, {"type": "text", "text": "B."}]
     r = run(FakeClient(make_response(blocks, stop="refusal", model="x")))
-    assert r.text == "A. B."
+    assert r.text == "A.B."
     assert r.content == blocks
     assert r.stop_reason == "refusal"
     assert r.model == "x"
@@ -215,17 +216,30 @@ def test_build_client_no_retries():
 # ---- streaming ----
 
 
+SERVER_BLOCK_START = NS(type="content_block_start", content_block=NS(type="server_tool_use"))
+TEXT_BLOCK_START = NS(type="content_block_start", content_block=NS(type="text"))
+
+
+def text_event(t):
+    return NS(type="content_block_delta", delta=NS(type="text_delta", text=t))
+
+
 class FakeStream:
+    """Iterates raw SDK-shaped events; plain strings become text_delta events."""
+
     def __init__(self, deltas, final, exc=None):
-        self.text_stream = self._gen(deltas, exc)
+        self._events = self._gen(deltas, exc)
         self._final = final
         self.closed = False
 
     def _gen(self, deltas, exc):
         for d in deltas:
-            yield d
+            yield text_event(d) if isinstance(d, str) else d
         if exc:
             raise exc
+
+    def __iter__(self):
+        return self._events
 
     def __enter__(self):
         return self
@@ -313,3 +327,53 @@ def test_stream_close_exits_context():
     assert next(gen) == "a"
     gen.close()
     assert sc.last.closed
+
+
+# ---- server tools / search signal ----
+
+
+def test_server_tools_passed_through_sonnet():
+    c = FakeClient()
+    AnthropicProvider(c).complete(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                  tools=[], effort="low", server_tools=[WEB_SEARCH_TOOL])
+    kw = c.calls[0][1]
+    assert kw["tools"] == [WEB_SEARCH_TOOL]
+    assert "tool_choice" not in kw
+    assert kw["betas"] == ["thinking-binding-controls-2026-08-01", "server-side-fallback-2026-07-01"]
+    assert kw["fallbacks"] == "default"
+
+
+def test_custom_plus_server_tools():
+    tool = ToolSpec("t", "d", {"type": "object"})
+    c = FakeClient()
+    AnthropicProvider(c).complete(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                  tools=[tool], effort="low", server_tools=[WEB_SEARCH_TOOL])
+    kw = c.calls[0][1]
+    assert [t["name"] for t in kw["tools"]] == ["t", "web_search"]
+    assert kw["tools"][1] == WEB_SEARCH_TOOL
+    assert kw["tool_choice"] == {"type": "auto"}
+
+
+def test_stream_yields_search_started():
+    sc = FakeStreamClient([SERVER_BLOCK_START, TEXT_BLOCK_START, "Tonight", " at 7."])
+    gen = AnthropicProvider(sc).stream(model="claude-sonnet-5-5", system=SYSTEM, messages=MSGS,
+                                       tools=[], effort="low", server_tools=[WEB_SEARCH_TOOL])
+    deltas, _ = drain(gen)
+    assert deltas == [SEARCH_STARTED, "Tonight", " at 7."]
+    assert sc.calls[0]["tools"] == [WEB_SEARCH_TOOL]
+
+
+def test_text_join_no_spaces():
+    usage = NS(input_tokens=10, output_tokens=5, cache_read_input_tokens=None,
+               cache_creation_input_tokens=None, server_tool_use=NS(web_search_requests=1))
+    resp = make_response(blocks=[{"type": "text", "text": "The Nuggets play"},
+                                 {"type": "text", "text": " at 7 PM."}], usage=usage)
+    res = run(FakeClient(response=resp))
+    assert res.text == "The Nuggets play at 7 PM."
+    assert res.usage.web_search_requests == 1
+
+
+def test_missing_server_tool_use_is_zero_searches():
+    assert run(FakeClient()).usage.web_search_requests == 0
+    usage = NS(input_tokens=1, output_tokens=1, server_tool_use=None)
+    assert run(FakeClient(response=make_response(usage=usage))).usage.web_search_requests == 0
