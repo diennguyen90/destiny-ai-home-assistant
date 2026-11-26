@@ -5,15 +5,15 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .fillers import FillerPicker
 from .costs import Usage, cost_usd
-from .prompts import DESTINY_BASE, ESCALATE_TOOL, context_block
-from .providers.base import ProviderResult
+from .prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL, context_block
+from .providers.base import SEARCH_STARTED, ProviderResult
 from .router import clean_text, route
 from .store import RequestRecord
 
@@ -24,6 +24,7 @@ CAPPED_LINE = "I've done a lot of thinking today. Let's talk again tomorrow."
 ERROR_LINE = "Sorry, something went wrong in my head. Please try again."
 REFUSAL_LINE = "I can't help with that one. Let's ask a grown-up."
 LOST_LINE = " Sorry, I lost my train of thought."
+WEB_LINE = " Let me check the web real quick."
 
 MAX_TURNS = 12  # complete [user, system, assistant] turns kept before a fresh start
 MAX_CONVERSATION_ID = 128
@@ -70,6 +71,7 @@ class _StreamState:
     cid: str
     cont: bool = False
     model_text: bool = False
+    web_line: bool = False
     spoken: list[str] = field(default_factory=list)
 
 
@@ -167,11 +169,36 @@ class Engine:
                 if self._escalated(result):
                     tier, reason, result = 2, "escalated", None
             if result is None:
-                result = self._call(tier, reason, plan.system, plan.messages, [], plan.cid, req, plan.chars,
-                                    plan.now)
+                result = self._call_paused(plan, tier, reason)
         except Exception as exc:
             return self._fail(exc, plan, tier, reason)
         return self._finish(plan, tier, reason, result)
+
+    def _call_paused(self, plan: _Plan, tier: int, reason: str) -> ProviderResult:
+        """Tier-2 call; a pause_turn is continued once (if time allows) and merged into one result."""
+        first = self._call(tier, reason, plan.system, plan.messages, [], plan.cid, plan.req, plan.chars, plan.now)
+        if first.stop_reason != "pause_turn":
+            return first
+        try:
+            second = self._call(tier, reason, plan.system, self._continuation(plan, first), [], plan.cid,
+                                plan.req, plan.chars, plan.now)
+        except _DeadlineExceeded:
+            log.warning("pause_turn not continued: deadline")
+            return first
+        return self._merge(first, second)
+
+    @staticmethod
+    def _continuation(plan: _Plan, first: ProviderResult) -> list[dict]:
+        return plan.messages + [{"role": "assistant", "content": first.content}]
+
+    @staticmethod
+    def _merge(first: ProviderResult, second: ProviderResult) -> ProviderResult:
+        a, b = first.usage, second.usage
+        usage = Usage(a.input_tokens + b.input_tokens, a.output_tokens + b.output_tokens,
+                      a.cache_read_tokens + b.cache_read_tokens, a.cache_write_tokens + b.cache_write_tokens,
+                      a.web_search_requests + b.web_search_requests)
+        return replace(second, text=first.text + second.text, content=first.content + second.content,
+                       usage=usage, tool_calls=first.tool_calls + second.tool_calls)
 
     @staticmethod
     def _escalated(result: ProviderResult) -> bool:
@@ -194,6 +221,10 @@ class Engine:
         cid, req, chars = plan.cid, plan.req, plan.chars
         if result.stop_reason == "refusal":
             return self._respond(REFUSAL_LINE, cid, req, tier, result.model, reason, "refusal", chars, log_it=False)
+        if result.stop_reason == "pause_turn":  # could not be continued: speak what we have, store nothing
+            if result.text.strip():
+                return ConverseResponse(result.text, cid, False)
+            return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":paused", "error", chars)
         if not result.text.strip():
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error", chars)
         with self._lock:
@@ -226,9 +257,9 @@ class Engine:
                 yield resp.speech
                 return
             tier, reason = 2, "escalated"
-        yield self._fillers.pick(req.device_id) + " "
+        yield self._fillers.pick(req.device_id, "web" if reason == "live" else "normal") + " "
         try:
-            result = yield from self._stream_call(plan, tier, reason, st)
+            result = yield from self._stream_paused(plan, tier, reason, st)
         except Exception as exc:
             resp = self._fail(exc, plan, tier, reason)
             yield LOST_LINE if st.model_text else resp.speech
@@ -241,8 +272,21 @@ class Engine:
         elif not st.model_text:
             yield resp.speech
 
-    def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
-        """One streamed model call (no tools), logged. Returns the ProviderResult."""
+    def _stream_paused(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
+        """Streamed tier-2 call; a pause_turn is continued once (streaming too) and merged."""
+        first = yield from self._stream_call(plan, tier, reason, st, plan.messages)
+        if first.stop_reason != "pause_turn":
+            return first
+        try:
+            second = yield from self._stream_call(plan, tier, reason, st, self._continuation(plan, first))
+        except _DeadlineExceeded:
+            log.warning("pause_turn not continued: deadline")
+            return first
+        return self._merge(first, second)
+
+    def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState,
+                     messages: list[dict]) -> Iterator[str]:
+        """One streamed model call (server tools on tier 2), logged. Returns the ProviderResult."""
         model = self._model(tier)
         effort = self._s.tier1_effort if tier == 1 else self._s.tier2_effort
         remaining = TOTAL_BUDGET_S - (self._clock() - plan.now).total_seconds()  # deadline: first token
@@ -250,8 +294,8 @@ class Engine:
             raise _DeadlineExceeded()
         call_start = time.monotonic()
         gen = self._provider.stream(
-            model=model, system=plan.system, messages=plan.messages, tools=[], effort=effort, max_tokens=1024,
-            timeout=max(MIN_CALL_S, remaining),
+            model=model, system=plan.system, messages=messages, tools=[], effort=effort, max_tokens=1024,
+            timeout=max(MIN_CALL_S, remaining), server_tools=[WEB_SEARCH_TOOL] if tier == 2 else None,
         )
         first_ms = None
         result: ProviderResult | None = None
@@ -262,6 +306,11 @@ class Engine:
                 except StopIteration as stop:
                     result = stop.value
                     break
+                if delta is SEARCH_STARTED:
+                    if not st.model_text and reason != "live" and not st.web_line:
+                        st.web_line = True
+                        yield WEB_LINE  # spoken, but not model text and never stored in history
+                    continue
                 if not delta:
                     continue
                 if first_ms is None:
@@ -289,7 +338,7 @@ class Engine:
         start = time.monotonic()
         result = self._provider.complete(
             model=model, system=system, messages=messages, tools=tools, effort=effort, max_tokens=1024,
-            timeout=max(MIN_CALL_S, remaining),
+            timeout=max(MIN_CALL_S, remaining), server_tools=[WEB_SEARCH_TOOL] if tier == 2 else None,
         )
         latency = int((time.monotonic() - start) * 1000)
         escalated = self._escalated(result)
@@ -306,6 +355,7 @@ class Engine:
             ts_utc=self._clock(), conversation_id=cid, device_id=req.device_id, tier=tier, model=model,
             route_reason=reason, usage=usage, cost_usd=cost, latency_ms=latency, outcome=outcome,
             text_chars=chars, first_token_ms=first_token_ms,
+            web_searches=usage.web_search_requests or None,
         ))
 
     def _price(self, model, requested):

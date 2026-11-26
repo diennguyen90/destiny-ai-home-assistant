@@ -6,10 +6,10 @@ import pytest
 
 from destiny_brain.config import Settings
 from destiny_brain.costs import Usage
-from destiny_brain.engine import ConverseRequest, Engine
+from destiny_brain.engine import ERROR_LINE, ConverseRequest, Engine
 from destiny_brain.ha import HAClient
-from destiny_brain.prompts import DESTINY_BASE
-from destiny_brain.providers.base import ProviderError
+from destiny_brain.prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL
+from destiny_brain.providers.base import SEARCH_STARTED, ProviderError
 from destiny_brain.store import RequestRecord, Store
 
 from .fakes import FakeHA, FakeProvider, make_result
@@ -375,14 +375,14 @@ def test_ha_notify():
 
 # -- handle_stream --
 
-from destiny_brain.fillers import FILLERS  # noqa: E402
+from destiny_brain.fillers import FILLERS, WEB_FILLERS  # noqa: E402
 
 LOST = " Sorry, I lost my train of thought."
 
 
 class FixedFillers:
-    def pick(self, device_id):
-        return FILLERS[0]
+    def pick(self, device_id, kind="normal"):
+        return WEB_FILLERS[0] if kind == "web" else FILLERS[0]
 
 
 def sbuild(env, *results, streams=()):
@@ -555,3 +555,190 @@ def test_stream_unexpected_error_is_logged_and_log_failure_is_safe(env):
     e._log = boom
     deltas, end = run(e, req("hello"))
     assert deltas == [ERROR]
+
+
+# -- web search --
+
+WEB_LINE = " Let me check the web real quick."
+SEARCH_CONTENT = [
+    {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {"query": "nuggets"}},
+    {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [{"type": "web_search_result"}]},
+    {"type": "text", "text": "Nuggets play at 7."},
+]
+
+
+def test_tier2_calls_get_web_search_blocking(env):
+    e, p, *_ = build(env, make_result("Because.", model="claude-sonnet-5-5"))
+    e.handle(req("explain the water cycle"))
+    assert p.calls[0]["server_tools"] == [WEB_SEARCH_TOOL]
+
+
+def test_tier1_has_no_server_tools(env):
+    e, p, *_ = build(env, make_result("Four."))
+    e.handle(req("what is two plus two"))
+    assert not p.calls[0]["server_tools"] and p.calls[0]["tools"] == [ESCALATE_TOOL]
+
+
+def test_tier2_stream_gets_web_search(env):
+    e, p, *_ = sbuild(env)
+    run(e, req("explain the water cycle"))
+    assert p.stream_calls[0]["server_tools"] == [WEB_SEARCH_TOOL]
+
+
+def test_escalated_call_gets_web_search(env):
+    esc = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    e, p, *_ = build(env, esc, make_result("Deep.", model="claude-sonnet-5-5"))
+    e.handle(req("hmm"))
+    assert not p.calls[0]["server_tools"] and p.calls[1]["server_tools"] == [WEB_SEARCH_TOOL]
+
+
+def test_stream_live_route_uses_web_filler(env):
+    res = make_result("Nuggets play at 7.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[(["Nuggets play at 7."], res)])
+    deltas, end = run(e, req("do the nuggets play tonight"))
+    assert deltas[0] == WEB_FILLERS[0] + " " and deltas[1:] == ["Nuggets play at 7."]
+
+
+def test_stream_unplanned_search_line_once(env):
+    res = make_result("Answer.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, "Answer."], res)])
+    deltas, end = run(e, req("why is the sky blue"))
+    assert deltas == [FILLERS[0] + " ", WEB_LINE, "Answer."]
+    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + "Answer."
+
+
+def test_stream_web_line_never_enters_history(env):
+    res = make_result("Answer.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, "Answer."], res), (["More."], make_result("More."))])
+    run(e, req("why is the sky blue", cid="c"))
+    run(e, req("and then", cid="c"))
+    assert all(WEB_LINE not in str(m["content"]) for m in p.stream_calls[1]["messages"])
+
+
+def test_stream_no_search_line_after_text(env):
+    res = make_result("Part two.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[(["Part", SEARCH_STARTED, " two."], res)])
+    deltas, _ = run(e, req("why is the sky blue"))
+    assert deltas == [FILLERS[0] + " ", "Part", " two."]
+
+
+def test_stream_live_route_no_extra_line(env):
+    res = make_result("Nuggets win.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, "Nuggets win."], res)])
+    deltas, _ = run(e, req("do the nuggets play tonight"))
+    assert deltas == [WEB_FILLERS[0] + " ", "Nuggets win."]
+
+
+def test_search_blocks_kept_in_history(env):
+    first = make_result("Nuggets play at 7.", model="claude-sonnet-5-5", content=SEARCH_CONTENT)
+    e, p, *_ = build(env, first, make_result("Sure.", model="claude-sonnet-5-5"))
+    r = e.handle(req("do the nuggets play tonight", cid="c"))
+    assert r.speech == "Nuggets play at 7."
+    e.handle(req("and tomorrow", cid="c"))
+    assert p.calls[1]["messages"][2] == {"role": "assistant", "content": SEARCH_CONTENT}
+
+
+def test_followup_after_search_stays_tier2(env):
+    first = make_result("Nuggets play at 7.", model="claude-sonnet-5-5", content=SEARCH_CONTENT)
+    e, p, store, *_ = build(env, first, make_result("Sure.", model="claude-sonnet-5-5"))
+    e.handle(req("do the nuggets play tonight", cid="c"))
+    e.handle(req("and tomorrow", cid="c"))
+    assert store.recent()[0].route_reason == "sticky"
+    assert p.calls[1]["server_tools"] == [WEB_SEARCH_TOOL]
+
+
+def _paused(text="Part one. "):
+    content = [{"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {}},
+               {"type": "text", "text": text}]
+    return make_result(text, model="claude-sonnet-5-5", stop_reason="pause_turn", content=content,
+                       usage=Usage(10, 5, web_search_requests=1))
+
+
+def test_pause_turn_continued_once(env):
+    first = _paused()
+    second = make_result("Part two.", model="claude-sonnet-5-5", usage=Usage(20, 7, web_search_requests=1))
+    e, p, store, *_ = build(env, first, second, make_result("Ok.", model="claude-sonnet-5-5"))
+    r = e.handle(req("explain the water cycle", cid="c"))
+    assert len(p.calls) == 2
+    assert r.speech == "Part one. Part two."
+    assert p.calls[1]["messages"][-1] == {"role": "assistant", "content": first.content}
+    assert p.calls[1]["server_tools"] == [WEB_SEARCH_TOOL]
+    e.handle(req("and more", cid="c"))
+    hist = p.calls[2]["messages"]
+    assert hist[2] == {"role": "assistant", "content": first.content + second.content}
+    rows = store.recent()
+    assert len(rows) == 3 and sorted(x.web_searches for x in rows[1:]) == [1, 1]
+
+
+def test_stream_pause_turn_continues_and_streams(env):
+    first = _paused()
+    second = make_result("Part two.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[(["Part one. "], first), (["Part two."], second)])
+    deltas, end = run(e, req("explain the water cycle", cid="c"))
+    assert deltas == [FILLERS[0] + " ", "Part one. ", "Part two."]
+    assert len(p.stream_calls) == 2
+    assert p.stream_calls[1]["messages"][-1] == {"role": "assistant", "content": first.content}
+    assert end["speech"].endswith("Part one. Part two.")
+
+
+def _late_clock(e):
+    """Clock that jumps past the deadline once the first model call has started."""
+    state = {"on": False}
+
+    def clock():
+        return T0 + timedelta(seconds=14) if state["on"] else T0
+    orig = e._provider.complete, e._provider.stream
+
+    def complete(**kw):
+        r = orig[0](**kw)
+        state["on"] = True
+        return r
+
+    def stream(**kw):
+        gen = orig[1](**kw)
+        state["on"] = True
+        return gen
+    e._provider.complete, e._provider.stream = complete, stream
+    e._clock = clock
+
+
+def test_pause_turn_no_time_left_partial_text(env):
+    e, p, store, *_ = build(env, _paused("Part one."))
+    _late_clock(e)
+    r = e.handle(req("explain the water cycle", cid="c"))
+    assert len(p.calls) == 1 and r.speech == "Part one."
+
+
+def test_pause_turn_no_time_left_no_text(env):
+    first = _paused("")
+    first.content[:] = first.content[:1]
+    e, p, *_ = build(env, first)
+    _late_clock(e)
+    r = e.handle(req("explain the water cycle", cid="c"))
+    assert len(p.calls) == 1 and r.speech == ERROR_LINE
+
+
+def test_stream_pause_turn_no_time_left(env):
+    e, p, *_ = sbuild(env, streams=[(["Part one."], _paused("Part one."))])
+    _late_clock(e)
+    deltas, end = run(e, req("explain the water cycle", cid="c"))
+    assert len(p.stream_calls) == 1 and deltas == [FILLERS[0] + " ", "Part one."]
+    assert end["continue_conversation"] is False
+
+
+def test_logs_web_searches(env):
+    res = make_result("Hi.", model="claude-sonnet-5-5", usage=Usage(0, 0, web_search_requests=2))
+    e, p, store, *_ = build(env, res)
+    e.handle(req("explain the water cycle"))
+    rec = store.recent()[0]
+    assert rec.web_searches == 2 and rec.cost_usd == pytest.approx(0.02)
+    e.handle(req("hello", cid="z"))
+    assert store.recent()[0].web_searches is None
+
+
+def test_soft_cap_live_downgrades(env):
+    e, p, store, *_ = build(env, make_result("Maybe."))
+    spend(env[1], env[0].soft_cap_usd)
+    e.handle(req("do the nuggets play tonight"))
+    assert store.recent()[0].route_reason == "soft_cap" and store.recent()[0].tier == 1
+    assert not p.calls[0]["server_tools"]

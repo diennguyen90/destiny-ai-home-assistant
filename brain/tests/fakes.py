@@ -3,8 +3,8 @@ from destiny_brain.providers.base import ProviderResult
 
 
 def make_result(text="Hello there.", model="claude-haiku-5-5", stop_reason="end_turn",
-                tool_calls=None, usage=Usage(100, 20)):
-    content = [{"type": "text", "text": text}]
+                tool_calls=None, usage=Usage(100, 20), content=None):
+    content = content or [{"type": "text", "text": text}]
     if tool_calls:
         content = [{"type": "tool_use", "id": "tu_1", "name": n, "input": i} for n, i in tool_calls]
     return ProviderResult(text=text, content=content, tool_calls=list(tool_calls or []),
