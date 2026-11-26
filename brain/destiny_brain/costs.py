@@ -11,6 +11,10 @@ class Usage:
     output_tokens: int
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    web_search_requests: int = 0
+
+
+WEB_SEARCH_USD = 0.01
 
 
 def cost_usd(price: ModelPrice, usage: Usage) -> float:
@@ -20,4 +24,4 @@ def cost_usd(price: ModelPrice, usage: Usage) -> float:
         + usage.output_tokens * price.output
         + usage.cache_read_tokens * price.cache_read
         + usage.cache_write_tokens * price.cache_write
-    ) / 1_000_000
+    ) / 1_000_000 + usage.web_search_requests * WEB_SEARCH_USD

@@ -41,7 +41,7 @@ def make(tmp_path):
     store.log(RequestRecord(ts_utc=datetime.now(UTC), conversation_id="c", device_id="d", tier=1,
                             model="claude-haiku-5-5", route_reason="<b>rule</b>", usage=Usage(10, 5),
                             cost_usd=0.1234, latency_ms=321, outcome="ok", text_chars=5,
-                            first_token_ms=777))
+                            first_token_ms=777, web_searches=3))
     eng = FakeEngine()
     return TestClient(create_app(s, Deps(engine=eng, store=store))), eng
 
@@ -171,3 +171,10 @@ def test_parent_shows_first_word_column(tmp_path):
     c.post("/parent/login", data={"pin": PIN}, follow_redirects=False)
     page = c.get("/parent").text
     assert "First word (ms)" in page and "<td>777</td>" in page
+
+
+def test_parent_page_shows_web_searches(tmp_path):
+    c, _ = make(tmp_path)
+    c.post("/parent/login", data={"pin": PIN}, follow_redirects=False)
+    page = c.get("/parent").text
+    assert "<th>Searches</th>" in page and "<td>3</td>" in page

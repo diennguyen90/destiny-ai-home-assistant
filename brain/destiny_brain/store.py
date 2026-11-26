@@ -23,6 +23,7 @@ class RequestRecord:
     outcome: str  # ok | refusal | error | capped | empty
     text_chars: int  # only the length; text itself is never stored
     first_token_ms: int | None = None
+    web_searches: int | None = None
 
 
 _SCHEMA = """
@@ -72,6 +73,8 @@ class Store:
                 cols = {r[1] for r in c.execute("PRAGMA table_info(requests)")}
                 if "first_token_ms" not in cols:
                     c.execute("ALTER TABLE requests ADD COLUMN first_token_ms INTEGER")
+                if "web_searches" not in cols:
+                    c.execute("ALTER TABLE requests ADD COLUMN web_searches INTEGER")
         finally:
             c.close()
 
@@ -88,11 +91,11 @@ class Store:
         self._exec(
             "INSERT INTO requests (ts_utc, conversation_id, device_id, tier, model, route_reason,"
             " input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,"
-            " latency_ms, outcome, text_chars, first_token_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " latency_ms, outcome, text_chars, first_token_ms, web_searches) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (_iso(rec.ts_utc), rec.conversation_id, rec.device_id, rec.tier, rec.model,
              rec.route_reason, u.input_tokens, u.output_tokens, u.cache_read_tokens,
              u.cache_write_tokens, rec.cost_usd, rec.latency_ms, rec.outcome, rec.text_chars,
-             rec.first_token_ms),
+             rec.first_token_ms, rec.web_searches),
         )
 
     def _day_bounds(self, day: date) -> tuple[str, str]:
@@ -115,7 +118,7 @@ class Store:
         rows = self._exec(
             "SELECT ts_utc, conversation_id, device_id, tier, model, route_reason, input_tokens,"
             " output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, latency_ms, outcome,"
-            " text_chars, first_token_ms FROM requests ORDER BY ts_utc DESC, id DESC LIMIT ?",
+            " text_chars, first_token_ms, web_searches FROM requests ORDER BY ts_utc DESC, id DESC LIMIT ?",
             (limit,),
         )
         return [
@@ -123,7 +126,7 @@ class Store:
                 ts_utc=datetime.fromisoformat(r[0]), conversation_id=r[1], device_id=r[2],
                 tier=r[3], model=r[4], route_reason=r[5], usage=Usage(r[6], r[7], r[8], r[9]),
                 cost_usd=r[10], latency_ms=r[11], outcome=r[12], text_chars=r[13],
-                first_token_ms=r[14],
+                first_token_ms=r[14], web_searches=r[15],
             )
             for r in rows
         ]

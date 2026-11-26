@@ -61,7 +61,7 @@ def _dashboard(settings: Settings, store: Any) -> str:
         parts.append(f"<tr><td>{escape(day.isoformat())}</td><td>${cost:.4f}</td></tr>")
     parts.append("</table><h2>Last 50 requests</h2><table><tr><th>Time (UTC)</th><th>Tier</th>"
                  "<th>Model</th><th>Reason</th><th>Tokens in/out</th><th>Cost</th>"
-                 "<th>Latency ms</th><th>First word (ms)</th><th>Outcome</th></tr>")
+                 "<th>Latency ms</th><th>First word (ms)</th><th>Searches</th><th>Outcome</th></tr>")
     for r in store.recent(50):
         u = r.usage
         parts.append(
@@ -71,6 +71,7 @@ def _dashboard(settings: Settings, store: Any) -> str:
             f"<td>{u.input_tokens}/{u.output_tokens}</td><td>${r.cost_usd:.4f}</td>"
             f"<td>{r.latency_ms}</td>"
             f"<td>{'' if r.first_token_ms is None else escape(str(r.first_token_ms))}</td>"
+            f"<td>{'' if r.web_searches is None else escape(str(r.web_searches))}</td>"
             f"<td>{escape(r.outcome)}</td></tr>"
         )
     parts.append("</table>")
