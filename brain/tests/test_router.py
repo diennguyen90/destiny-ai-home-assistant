@@ -48,6 +48,10 @@ def test_clean_text_keeps_unicode():
         "is target open now",
         "nfl standings",
         "can we watch the nuggets tonight",
+        "tell me the news",
+        "give me the headlines",
+        "what's the news in the u.s.",
+        "did our team win today",
     ],
 )
 def test_live_words_route_tier2(text):

@@ -603,8 +603,8 @@ def test_stream_unplanned_search_line_once(env):
     res = make_result("Answer.", model="claude-sonnet-5-5")
     e, p, store, _ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, "Answer."], res)])
     deltas, end = run(e, req("why is the sky blue"))
-    assert deltas == [FILLERS[0] + " ", WEB_LINE, BRIDGES[0], "Answer."]
-    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + BRIDGES[0] + "Answer."
+    assert deltas == [FILLERS[0] + " ", WEB_LINE, BRIDGES[0], " ", "Answer."]
+    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + BRIDGES[0] + " Answer."
 
 
 def test_stream_web_line_never_enters_history(env):
@@ -770,15 +770,15 @@ def test_stream_bridges_non_live(env):
     res = make_result("Answer.", model="claude-sonnet-5-5")
     e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED] * 4 + ["Answer."], res)])
     deltas, end = run(e, req("why is the sky blue"))
-    assert deltas == [FILLERS[0] + " ", WEB_LINE, BRIDGES[0], BRIDGES[1], "Answer."]
-    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + BRIDGES[0] + BRIDGES[1] + "Answer."
+    assert deltas == [FILLERS[0] + " ", WEB_LINE, BRIDGES[0], BRIDGES[1], " ", "Answer."]
+    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + BRIDGES[0] + BRIDGES[1] + " Answer."
 
 
 def test_stream_bridges_live_route_from_second_search(env):
     res = make_result("Nuggets win.", model="claude-sonnet-5-5")
     e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, SEARCH_STARTED, "Nuggets win."], res)])
     deltas, _ = run(e, req("do the nuggets play tonight"))
-    assert deltas == [WEB_FILLERS[0] + " ", BRIDGES[0], BRIDGES[1], "Nuggets win."]
+    assert deltas == [WEB_FILLERS[0] + " ", BRIDGES[0], BRIDGES[1], " ", "Nuggets win."]
 
 
 def test_stream_no_bridge_after_model_text(env):
@@ -837,3 +837,14 @@ def test_soft_cap_still_downgrades_without_search_blocks(env):
     spend(store, env[0].soft_cap_usd + 0.01)
     e.handle(req("and more", cid="c"))
     assert store.recent()[0].tier == 1 and store.recent()[0].route_reason == "soft_cap"
+
+
+def test_stream_space_between_spoken_line_and_model_text(env):
+    res = make_result("Answer.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, " Answer."], res)])
+    deltas, end = run(e, req("why is the sky blue"))
+    assert deltas == [FILLERS[0] + " ", WEB_LINE, " Answer."]  # delta already starts with space
+    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, "Answer."], res)])
+    deltas, end = run(e, req("why is the sky blue"))
+    assert deltas == [FILLERS[0] + " ", WEB_LINE, " ", "Answer."]
+    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + " Answer."

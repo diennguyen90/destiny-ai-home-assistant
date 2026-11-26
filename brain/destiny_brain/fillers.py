@@ -40,7 +40,7 @@ WEB_FILLERS: tuple[str, ...] = (
     "Ooh, good one, let me search the internet and see what I can find.",
     "Just a sec, my web surfboard is out and I'm hunting for your answer.",
     "Alright, let me peek at the internet for the newest word on that.",
-    "Hang tight, I'm checking the web so I can give you the latest news.",
+    "Hang tight, I'm checking the web so I can get you the freshest answer.",
 )
 
 
