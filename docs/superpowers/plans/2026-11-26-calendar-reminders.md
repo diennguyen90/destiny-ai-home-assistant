@@ -216,7 +216,7 @@
 - Modify: `docs/troubleshooting.md`, `docs/project-log.md`, `README.md` (spec link)
 
 - [ ] **Step 1: Write `docs/google-calendar-setup.md`.**
-  - Step-by-step: create a Google Cloud project, enable the Google Calendar API, set up the OAuth consent screen (External, add yourself as a test user), and create an OAuth client of type "Web application". Wait: HA's Google Calendar uses Application Credentials with "TVs and Limited Input devices" or "Web application" per the current HA docs. Check https://www.home-assistant.io/integrations/google/ and follow it exactly.
+  - Step-by-step: create a Google Cloud project, enable the Google Calendar API, set up the OAuth consent screen (External, add yourself as a test user), and create an OAuth client of the type HA's current docs require. Check https://www.home-assistant.io/integrations/google/ and follow it exactly.
   - In HA: Settings → Devices & Services → Add Integration → Google Calendar → enter the client ID and secret → sign in.
   - Then say "What's on our calendar today?" to verify.
   - Optional: `DESTINY_CALENDAR_ENTITY` if several calendars exist.
