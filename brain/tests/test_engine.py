@@ -870,7 +870,7 @@ def test_escalation_wins_over_household_tools(env):
 
 
 def test_tool_rounds_capped(env):
-    e, p, store, *_ = build(env, *[_tool_use("list_reminders", {}) for _ in range(5)])
+    e, p, store, *_ = build(env, *[_tool_use("bogus", {}) for _ in range(5)])
     r = e.handle(req("what are my reminders", "c1"))
     assert r.speech == ERROR and len(p.calls) == 4
     e.handle(req("hello", "c1"))
@@ -904,3 +904,76 @@ def test_tier2_stream_tool_round(env):
     assert p.stream_calls[0]["tools"] == list(HOUSEHOLD_TOOLS)
     assert p.stream_calls[0]["server_tools"] == [WEB_SEARCH_TOOL]
     assert p.stream_calls[1]["messages"][-1]["content"][0]["type"] == "tool_result"
+
+
+class _AdvancingHousehold:
+    """Fake household: returns a fixed sentence and moves the clock forward."""
+
+    def __init__(self, clock, jump=0):
+        self.clock, self.jump = clock, jump
+
+    def run(self, name, args):
+        self.clock.now += timedelta(seconds=self.jump)
+        return "Reminder set for 5 PM.", False
+
+
+def test_escalation_after_tool_round_does_not_rerun_tools(env):
+    settings, store = env
+    r1 = _tool_use("set_reminder", {"message": "x", "in_minutes": 5})
+    r2 = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    p = FakeProvider(r1, r2, make_result("Deep.", model="claude-sonnet-5-5"))
+    e = Engine(settings, store, p, FakeHA(), clock=Clock())
+    assert e.handle(req("remind me to read")).speech == "Deep."
+    assert len(store.pending_reminders()) == 1 and len(p.calls) == 3
+    last = p.calls[2]["messages"][-1]
+    assert last["content"][0]["type"] == "tool_result" and p.calls[2]["model"] == "claude-sonnet-5-5"
+
+
+def test_stream_escalation_after_tool_round_resumes_chain(env):
+    settings, store = env
+    r1 = _tool_use("set_reminder", {"message": "x", "in_minutes": 5})
+    r2 = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    p = FakeProvider(r1, r2, streams=[(["Deep."], make_result("Deep.", model="claude-sonnet-5-5"))])
+    e = Engine(settings, store, p, FakeHA(), clock=Clock(), fillers=FixedFillers())
+    _, end = run(e, req("remind me to read"))
+    assert len(store.pending_reminders()) == 1
+    assert p.stream_calls[0]["messages"][-1]["content"][0]["type"] == "tool_result"
+    assert end["speech"].endswith("Deep.")
+
+
+def test_deadline_after_tool_round_speaks_tool_result(env):
+    settings, store = env
+    clock = Clock()
+    p = FakeProvider(_tool_use("set_reminder", {"message": "x", "in_minutes": 5}))
+    e = Engine(settings, store, p, FakeHA(), clock=clock, household=_AdvancingHousehold(clock, 20))
+    r = e.handle(req("remind me to read", "c1"))
+    assert r.speech == "Reminder set for 5 PM." and len(p.calls) == 1
+    clock.now = T0
+    e.handle(req("hi", "c1"))
+    assert len(p.calls[-1]["messages"]) == 2  # nothing stored
+
+
+def test_stream_deadline_after_tool_round_speaks_tool_result(env):
+    settings, store = env
+    clock = Clock()
+    first = make_result("", model="claude-sonnet-5-5", stop_reason="tool_use",
+                        tool_calls=[("set_reminder", {"message": "x", "in_minutes": 5})])
+    p = FakeProvider(streams=[([], first)])
+    e = Engine(settings, store, p, FakeHA(), clock=clock, fillers=FixedFillers(),
+               household=_AdvancingHousehold(clock, 20))
+    _, end = run(e, req("explain the water cycle"))
+    assert end["speech"].endswith("Reminder set for 5 PM.") and len(p.stream_calls) == 1
+
+
+def test_stream_tool_rounds_capped(env):
+    settings, store = env
+    clock = Clock()
+    streams = [([], make_result("", model="claude-sonnet-5-5", stop_reason="tool_use",
+                                tool_calls=[("list_reminders", {})])) for _ in range(5)]
+    p = FakeProvider(streams=streams)
+    e = Engine(settings, store, p, FakeHA(), clock=clock, fillers=FixedFillers(),
+               household=_AdvancingHousehold(clock, 0))
+    events = list(e.handle_stream(req("explain the water cycle", "c1")))
+    assert len(p.stream_calls) == 4
+    assert [x["type"] for x in events].count("ping") == 3
+    assert events[-1]["speech"].endswith("Reminder set for 5 PM.") and events[-1]["continue_conversation"] is False

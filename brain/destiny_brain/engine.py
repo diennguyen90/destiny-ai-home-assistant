@@ -10,9 +10,9 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import Settings
+from .costs import Usage, cost_usd
 from .fillers import FillerPicker
 from .household import HOUSEHOLD_TOOLS, Household
-from .costs import Usage, cost_usd
 from .prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL, context_block
 from .providers.base import HEARTBEAT, SEARCH_STARTED, ProviderResult
 from .router import clean_text, route
@@ -184,9 +184,9 @@ class Engine:
             if tier == 1:
                 result, chain = self._run_blocking(plan, 1, reason)
                 if self._escalated(result):
-                    tier, reason, result = 2, "escalated", None
+                    tier, reason, result = 2, "escalated", None  # tier 2 resumes from chain: tools never re-run
             if result is None:
-                result, chain = self._run_blocking(plan, tier, reason)
+                result, chain = self._run_blocking(plan, tier, reason, chain)
         except Exception as exc:
             return self._fail(exc, plan, tier, reason)
         return self._finish(replace(plan, messages=chain), tier, reason, result)
@@ -195,13 +195,14 @@ class Engine:
     def _tools(tier: int) -> list:
         return [ESCALATE_TOOL, *HOUSEHOLD_TOOLS] if tier == 1 else list(HOUSEHOLD_TOOLS)
 
-    def _run_blocking(self, plan: _Plan, tier: int, reason: str) -> tuple[ProviderResult, list[dict]]:
+    def _run_blocking(self, plan: _Plan, tier: int, reason: str,
+                      start: list[dict] | None = None) -> tuple[ProviderResult, list[dict]]:
         """Model call plus household tool rounds and one pause_turn continuation, merged into one result.
 
         Returns (result, messages that produced the final call); history is that chain plus result.content.
         A tier-1 result that escalates is returned as is.
         """
-        messages, acc, rounds, paused = plan.messages, None, 0, False
+        messages, acc, rounds, paused = start or plan.messages, None, 0, False
         tools = self._tools(tier)
         while True:
             try:
@@ -275,6 +276,9 @@ class Engine:
         if result.stop_reason in ("pause_turn", "tool_use"):  # unfinished: speak what we have, store nothing
             if result.text.strip():
                 return ConverseResponse(result.text, cid, False)
+            done = self._last_tool_texts(plan.messages)
+            if done:
+                return ConverseResponse(done, cid, False)
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":paused", "error", chars)
         if not result.text.strip():
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error", chars)
@@ -286,6 +290,15 @@ class Engine:
                 conv.tier = tier
         speech = result.text
         return ConverseResponse(speech, cid, speech.rstrip().endswith("?"))
+
+    @staticmethod
+    def _last_tool_texts(chain: list[dict]) -> str:
+        """Spoken-friendly results of the last completed tool round (the chain ends with them)."""
+        last = chain[-1] if chain else None
+        if not last or last["role"] != "user" or not isinstance(last["content"], list):
+            return ""
+        return " ".join(b["content"] for b in last["content"]
+                        if b.get("type") == "tool_result" and not b.get("is_error") and b.get("content"))
 
     @staticmethod
     def _history(chain: list[dict], content: list) -> list[dict]:
@@ -302,6 +315,7 @@ class Engine:
             return
         st.cid = plan.cid
         tier, reason = plan.tier, plan.reason
+        start = plan.messages
         if tier == 1:
             try:
                 result, chain = self._run_blocking(plan, 1, reason)
@@ -314,9 +328,10 @@ class Engine:
                 yield resp.speech
                 return
             tier, reason = 2, "escalated"
+            start = chain
         yield self._fillers.pick(req.device_id, "web" if reason == "live" else "normal") + " "
         try:
-            result, chain = yield from self._stream_loop(plan, tier, reason, st)
+            result, chain = yield from self._stream_loop(plan, tier, reason, st, start)
         except Exception as exc:
             resp = self._fail(exc, plan, tier, reason)
             yield LOST_LINE if st.model_text else resp.speech
@@ -329,9 +344,10 @@ class Engine:
         elif not st.model_text:
             yield resp.speech
 
-    def _stream_loop(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
+    def _stream_loop(self, plan: _Plan, tier: int, reason: str, st: _StreamState,
+                     start: list[dict]) -> Iterator[str]:
         """Streamed counterpart of _run_blocking. Returns (result, messages of the final call)."""
-        messages, acc, rounds, paused = plan.messages, None, 0, False
+        messages, acc, rounds, paused = start, None, 0, False
         while True:
             try:
                 result = yield from self._stream_call(plan, tier, reason, st, messages)
@@ -344,8 +360,7 @@ class Engine:
             step = self._advance(result, messages, tier, rounds, paused)
             if step is None:
                 return acc, messages
-            if step[1] > rounds:
-                yield HEARTBEAT  # tool round: keep the connection alive while we continue
+            yield HEARTBEAT  # every continuation: keep the connection alive
             st.seam_pending = bool(st.last_text) and not st.last_text[-1].isspace()
             messages, rounds, paused = step
 
