@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -11,7 +12,7 @@ log = logging.getLogger(__name__)
 
 _NO_CALENDAR = "The family calendar isn't connected yet."
 _MAX_PENDING = 50
-_TIME_FMT = "%Y-%m-%dT%H:%M"
+_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$")
 
 HOUSEHOLD_TOOLS: list[ToolSpec] = [
     ToolSpec(
@@ -134,11 +135,17 @@ class Household:
 
     # -- helpers
     def _parse_local(self, value, what: str) -> datetime:
+        m = _TIME_RE.match(str(value).strip())
+        if not m:
+            raise _ToolError(f"The {what} time must look like 2026-11-27T09:00.")
         try:
-            dt = datetime.strptime(str(value).strip(), _TIME_FMT)
+            dt = datetime.fromisoformat(m.group(1) + (m.group(2) or "").replace("Z", "+00:00"))
         except ValueError:
             raise _ToolError(f"The {what} time must look like 2026-11-27T09:00.")
-        return dt.replace(tzinfo=self._tz)
+        dt = dt.replace(second=0, microsecond=0)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=self._tz)
+        return dt.astimezone(self._tz)
 
     def _parse_date(self, value, what: str) -> date:
         try:

@@ -149,3 +149,18 @@ def test_calendar_add_failure(env):
     hh, _, ha, _ = env
     ha.create_calendar_event = lambda *a, **k: False
     assert hh.run("add_calendar_event", {"title": "x", "date": "2026-11-27"})[1] is True
+
+
+def test_time_with_seconds_accepted(env):
+    hh, store, _, _ = env
+    _, err = hh.run("set_reminder", {"message": "x", "at": "2026-11-27T09:00:30"})
+    assert not err
+    assert store.pending_reminders()[0].due_utc == datetime(2026, 11, 27, 17, 0, tzinfo=timezone.utc)
+
+
+def test_time_with_offset_converted(env):
+    hh, _, ha, _ = env
+    _, err = hh.run("add_calendar_event", {"title": "x", "start": "2026-11-27T17:00:00Z"})
+    assert not err
+    assert ha.created[0]["start"] == datetime(2026, 11, 27, 9, 0, tzinfo=TZ)
+    assert ha.created[0]["start"].utcoffset() == datetime(2026, 11, 27, 9, 0, tzinfo=TZ).utcoffset()
