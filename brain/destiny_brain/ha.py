@@ -30,6 +30,7 @@ class HAClient:
         self._fcache: dict[tuple[str, int], tuple[datetime, str]] = {}
         self._cache: dict[str, tuple[datetime, str]] = {}
         self._cal_cache: tuple[datetime, str | None] | None = None
+        self._cal_choice: str | None = None
 
     def weather_line(self, entity_id: str) -> str | None:
         now = self._clock()
@@ -138,14 +139,32 @@ class HAClient:
         try:
             resp = self._http.get(f"{self._base}/api/states", headers=self._headers, timeout=5)
             resp.raise_for_status()
-            ids = sorted(
-                str(s["entity_id"]) for s in resp.json()
-                if str(s.get("entity_id", "")).startswith("calendar.")
-            )
+            cals = [s for s in resp.json() if str(s.get("entity_id", "")).startswith("calendar.")]
         except Exception:
             log.warning("calendar discovery failed")
             return None
-        found = ids[0] if ids else None
+
+        def skip(s: dict) -> bool:
+            name = f"{s['entity_id']} {(s.get('attributes') or {}).get('friendly_name', '')}".lower()
+            return "holiday" in name or "birthday" in name
+
+        def writable(s: dict) -> bool:
+            try:
+                return bool(int((s.get("attributes") or {}).get("supported_features") or 0) & 1)
+            except (TypeError, ValueError):
+                return False
+
+        cals.sort(key=lambda s: str(s["entity_id"]))
+        found = None
+        for pick in (lambda s: writable(s) and not skip(s), lambda s: not skip(s), lambda s: True):
+            match = next((s for s in cals if pick(s)), None)
+            if match:
+                found = str(match["entity_id"])
+                break
+        if found != self._cal_choice:
+            self._cal_choice = found
+            if found:
+                log.warning("calendar auto-selected: %s (set DESTINY_CALENDAR_ENTITY to override)", found)
         self._cal_cache = (now, found)
         return found
 

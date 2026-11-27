@@ -59,17 +59,20 @@ def test_future_not_sent(env):
     assert status(store, rid)[0] == "pending"
 
 
-def test_notify_failure_retries_then_fails(env):
+def test_notify_failure_retries_until_expiry(env):
     store, ha, sched = env
     ha.notify_ok = False
     rid = store.add_reminder("x", NOW - timedelta(seconds=1), NOW)
-    sched.tick()
-    assert tuple(status(store, rid)) == ("pending", 1)
-    for _ in range(18):
+    for n in range(1, 61):
         sched.tick()
-    assert tuple(status(store, rid)) == ("pending", 19)
+        assert tuple(status(store, rid)) == ("pending", n)
+    ha.notify_ok = True
+    assert sched.tick() == 1
+    assert status(store, rid)[0] == "sent"
+    ha.notify_ok = False
+    rid2 = store.add_reminder("y", NOW - timedelta(hours=25), NOW)
     sched.tick()
-    assert tuple(status(store, rid)) == ("failed", 20)
+    assert status(store, rid2)[0] == "expired"
 
 
 def test_tick_serialized_no_double_send(env):

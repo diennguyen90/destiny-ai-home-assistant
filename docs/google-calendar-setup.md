@@ -86,7 +86,13 @@ Note: she can read and add events, but not edit or delete them yet. Do that in G
 
 ## 7. If you have more than one calendar
 
-Destiny uses the first calendar Home Assistant finds. If your Google account has several (for example a personal one and the family one) and she reads the wrong one, tell her which one to use:
+Destiny picks the main writable calendar automatically. She skips holiday and birthday calendars. To see which one she picked, run this in PowerShell:
+
+```
+docker compose logs brain | findstr calendar
+```
+
+Look for the line "calendar auto-selected". If your Google account has several calendars (for example a personal one and the family one), we recommend you set `DESTINY_CALENDAR_ENTITY` yourself so she always uses the right one, and you must do so if she picked the wrong one:
 
 1. In Home Assistant, go to **Settings > Devices & services > Entities** and search for `calendar.`. Note the id of the one you want, for example `calendar.family`.
 2. Open the `.env` file in `C:\dev\Destiny` in Notepad and add a line:

@@ -146,3 +146,11 @@ def test_reminder_round_trip(store):
     assert store.cancel_reminder(early) is False
     rows = store._exec("SELECT status, sent_utc, attempts FROM reminders WHERE id = ?", (early,))
     assert rows[0][0] == "sent" and datetime.fromisoformat(rows[0][1]) == sent_at and rows[0][2] == 2
+
+
+def test_mark_reminder_does_not_overwrite_cancelled(store):
+    now = utc(2026, 11, 26, 12, 0)
+    rid = store.add_reminder("x", utc(2026, 11, 26, 13, 0), now)
+    assert store.cancel_reminder(rid) is True
+    store.mark_reminder(rid, "sent", now)
+    assert store._exec("SELECT status, sent_utc FROM reminders WHERE id = ?", (rid,))[0] == ("cancelled", None)

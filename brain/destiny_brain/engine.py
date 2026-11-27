@@ -281,7 +281,12 @@ class Engine:
                 return ConverseResponse(done, cid, False)
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":paused", "error", chars)
         if not result.text.strip():
+            done = self._last_tool_texts(plan.messages)  # tool round succeeded: never say "error" (no duplicates)
+            if done:
+                return ConverseResponse(done, cid, False)
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error", chars)
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in result.content):
+            return ConverseResponse(result.text, cid, False)  # unanswered tool_use: store nothing
         with self._lock:
             conv = self._convs.get(cid)
             if conv is not None:

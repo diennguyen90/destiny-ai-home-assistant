@@ -33,7 +33,8 @@ class Clock:
 @pytest.fixture
 def env(tmp_path):
     settings = Settings(anthropic_api_key="k", brain_shared_key="s", parent_pin="1",
-                        tz="America/Los_Angeles", notify_service="mobile_app_x")
+                        tz="America/Los_Angeles", notify_service="mobile_app_x",
+                        reminder_notify_service="notify.phone")
     store = Store(str(tmp_path / "b.db"), settings.tz)
     store.init()
     return settings, store
@@ -977,3 +978,34 @@ def test_stream_tool_rounds_capped(env):
     assert len(p.stream_calls) == 4
     assert [x["type"] for x in events].count("ping") == 3
     assert events[-1]["speech"].endswith("Reminder set for 5 PM.") and events[-1]["continue_conversation"] is False
+
+
+def test_empty_text_after_tool_round_speaks_tool_result(env):
+    e, p, store, *_ = build(env, _tool_use("set_reminder", {"message": "x", "in_minutes": 5}), make_result(""))
+    r = e.handle(req("remind me to x", "c1"))
+    assert r.speech.startswith("Reminder set for") and r.speech != ERROR
+    e.handle(req("hi", "c1"))
+    assert len(p.calls[-1]["messages"]) == 2  # nothing stored
+
+
+def test_stream_empty_text_after_tool_round_speaks_tool_result(env):
+    settings, store = env
+    first = make_result("", model="claude-sonnet-5-5", stop_reason="tool_use",
+                        tool_calls=[("set_reminder", {"message": "x", "in_minutes": 5})])
+    second = make_result("", model="claude-sonnet-5-5")
+    p = FakeProvider(streams=[([], first), ([], second)])
+    e = Engine(settings, store, p, FakeHA(), clock=Clock(), fillers=FixedFillers())
+    _, end = run(e, req("explain the water cycle"))
+    assert "Reminder set for" in end["speech"] and "went wrong" not in end["speech"]
+    assert "lost my train" not in end["speech"]
+
+
+def test_unanswered_tool_use_in_final_content_not_stored(env):
+    partial = make_result("Setting it", stop_reason="max_tokens",
+                          content=[{"type": "text", "text": "Setting it"},
+                                   {"type": "tool_use", "id": "tu_9", "name": "set_reminder", "input": {}}])
+    e, p, *_ = build(env, partial, make_result("ok"))
+    r = e.handle(req("hello", "c1"))
+    assert r.speech == "Setting it"
+    e.handle(req("again", "c1"))
+    assert [m["role"] for m in p.calls[1]["messages"]] == ["user", "system"]

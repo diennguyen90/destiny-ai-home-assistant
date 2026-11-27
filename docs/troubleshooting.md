@@ -132,7 +132,7 @@ You see HTTP 401 from `/v1/converse` in `docker compose logs brain`, or Home Ass
 - Fix:
   1. Check the Home Assistant Companion app on the phone is signed in and allowed to send notifications (iPhone Settings > Notifications > Home Assistant), and that Focus or Do Not Disturb isn't hiding it.
   2. Check the notify service name. Reminders go to `DESTINY_REMINDER_NOTIFY`, or `DESTINY_NOTIFY_SERVICE` if that isn't set (today `mobile_app_iphone`). In Home Assistant, Developer tools > Actions, search for `notify.` and make sure that exact service exists. If you change `.env`, run `docker compose up -d --no-deps --force-recreate brain`.
-  3. Read `docker compose logs brain --tail 100` and look for `notify failed`. A failed reminder stays pending and is retried every 15 seconds, and is given up on after 20 failures.
+  3. Read `docker compose logs brain --tail 100` and look for `notify failed`. A failed reminder stays pending and is retried every 15 seconds, and keeps being retried until it is 24 hours late.
 - Good to know:
   - If the brain was down when a reminder was due, it is sent late, starting with "(Late)". More than 24 hours late, it is dropped.
   - Reminders are one-time only, and all go to the one phone.
@@ -140,7 +140,7 @@ You see HTTP 401 from `/v1/converse` in `docker compose logs brain`, or Home Ass
 
 ### She says "The family calendar isn't connected yet."
 
-- Cause: Home Assistant has no calendar yet, or the brain hasn't noticed it. She looks for the first `calendar.*` entity (or `DESTINY_CALENDAR_ENTITY`) and remembers the answer for up to 5 minutes.
+- Cause: Home Assistant has no calendar yet, or the brain hasn't noticed it. She picks the main writable `calendar.*` entity (or uses `DESTINY_CALENDAR_ENTITY`) and remembers the answer for up to 5 minutes.
 - Fix: follow the [Google Calendar setup guide](google-calendar-setup.md). If it is already linked, check Developer tools > States for a `calendar.` entity, wait up to 5 minutes, and ask again. If `DESTINY_CALENDAR_ENTITY` is set, check the id is spelled exactly as it is in Home Assistant.
 
 ### She reads the wrong calendar

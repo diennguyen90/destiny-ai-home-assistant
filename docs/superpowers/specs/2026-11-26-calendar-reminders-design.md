@@ -93,7 +93,7 @@ Add to `DESTINY_BASE`:
 - **Late reminders:**
   - More than 5 minutes late (for example, the brain was down): the message is prefixed "(Late) ".
   - More than 24 h late: marked `expired` and not sent.
-- **Notify failure:** stays pending and is retried next tick. After 20 failed attempts it is marked `failed`.
+- **Notify failure:** stays pending and is retried next tick. It keeps retrying every tick until it is more than 24 h late, then it is marked `expired`. A WARNING is logged on the 1st failure and every 20th after.
 - **Locking:** a row is marked sent only after notify succeeds, and ticks are serialized.
 
 ### 4.6 Calendar via Home Assistant

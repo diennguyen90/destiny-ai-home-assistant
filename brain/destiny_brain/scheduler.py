@@ -10,7 +10,7 @@ log = logging.getLogger("destiny.scheduler")
 
 LATE_AFTER = timedelta(minutes=5)
 EXPIRE_AFTER = timedelta(hours=24)
-MAX_ATTEMPTS = 20
+WARN_EVERY = 20
 TITLE = "Destiny reminder"
 
 
@@ -49,9 +49,10 @@ class ReminderScheduler:
                     sent += 1
                     log.info("reminder %s sent", r.id)
                 else:
-                    if self._store.bump_reminder_attempts(r.id) >= MAX_ATTEMPTS:
-                        self._store.mark_reminder(r.id, "failed", now)
-                        log.info("reminder %s failed", r.id)
+                    # stays pending; retried every tick until it is more than 24 h late (then "expired")
+                    attempts = self._store.bump_reminder_attempts(r.id)
+                    if attempts == 1 or attempts % WARN_EVERY == 0:
+                        log.warning("reminder %s notify failed (attempt %d); will keep retrying", r.id, attempts)
             return sent
 
     def _run(self) -> None:

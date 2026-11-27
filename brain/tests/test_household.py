@@ -17,7 +17,8 @@ def local(y, mo, d, h, mi, s=0):
 
 @pytest.fixture
 def env(tmp_path):
-    settings = Settings(anthropic_api_key="k", brain_shared_key="s", parent_pin="p", tz="America/Los_Angeles")
+    settings = Settings(anthropic_api_key="k", brain_shared_key="s", parent_pin="p", tz="America/Los_Angeles",
+                        reminder_notify_service="notify.phone")
     store = Store(str(tmp_path / "b.db"), settings.tz)
     store.init()
     ha = FakeHA()
@@ -158,9 +159,17 @@ def test_time_with_seconds_accepted(env):
     assert store.pending_reminders()[0].due_utc == datetime(2026, 11, 27, 17, 0, tzinfo=timezone.utc)
 
 
-def test_time_with_offset_converted(env):
+def test_time_offset_ignored_as_local(env):
     hh, _, ha, _ = env
     _, err = hh.run("add_calendar_event", {"title": "x", "start": "2026-11-27T17:00:00Z"})
     assert not err
-    assert ha.created[0]["start"] == datetime(2026, 11, 27, 9, 0, tzinfo=TZ)
-    assert ha.created[0]["start"].utcoffset() == datetime(2026, 11, 27, 9, 0, tzinfo=TZ).utcoffset()
+    assert ha.created[0]["start"] == datetime(2026, 11, 27, 17, 0, tzinfo=TZ)
+
+
+def test_set_reminder_errors_without_notify_service(env):
+    from dataclasses import replace
+    hh, store, _, _ = env
+    hh._s = replace(hh._s, reminder_notify_service="")
+    text, err = hh.run("set_reminder", {"message": "x", "in_minutes": 5})
+    assert err and text == "Reminders can't be delivered yet because no phone is set up."
+    assert store.pending_reminders() == []

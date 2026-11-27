@@ -139,13 +139,10 @@ class Household:
         if not m:
             raise _ToolError(f"The {what} time must look like 2026-11-27T09:00.")
         try:
-            dt = datetime.fromisoformat(m.group(1) + (m.group(2) or "").replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(m.group(1))  # any offset/Z is ignored: the time is family-local
         except ValueError:
             raise _ToolError(f"The {what} time must look like 2026-11-27T09:00.")
-        dt = dt.replace(second=0, microsecond=0)
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=self._tz)
-        return dt.astimezone(self._tz)
+        return dt.replace(second=0, microsecond=0, tzinfo=self._tz)
 
     def _parse_date(self, value, what: str) -> date:
         try:
@@ -161,6 +158,8 @@ class Household:
             raise _ToolError("The reminder needs a message.")
         if len(message) > 200:
             raise _ToolError("That reminder message is too long; keep it under 200 characters.")
+        if not self._s.reminder_notify_service:
+            raise _ToolError("Reminders can't be delivered yet because no phone is set up.")
         at, mins = args.get("at"), args.get("in_minutes")
         if (at is None) == (mins is None):
             raise _ToolError("Give either a time or a number of minutes, not both or neither.")

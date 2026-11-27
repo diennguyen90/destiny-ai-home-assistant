@@ -228,7 +228,7 @@ class Store:
     def mark_reminder(self, rid: int, status: str, now_utc: datetime) -> None:
         self._exec(
             "UPDATE reminders SET status = ?, sent_utc = CASE WHEN ? = 'sent' THEN ? ELSE sent_utc END"
-            " WHERE id = ?",
+            " WHERE id = ? AND status = 'pending'",
             (status, status, _iso(now_utc), rid),
         )
 

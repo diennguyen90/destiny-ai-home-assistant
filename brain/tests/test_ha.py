@@ -99,3 +99,34 @@ def test_create_event_timed_and_all_day():
 def test_create_event_false_on_500():
     assert make(lambda r: httpx.Response(500)).create_calendar_event(
         "calendar.f", "x", start=NOW, end=NOW) is False
+
+
+def _states(*cals):
+    return lambda r: httpx.Response(200, json=[
+        {"entity_id": e, "attributes": {"supported_features": f, "friendly_name": n or e}} for e, f, n in cals])
+
+
+def test_find_calendar_prefers_writable_non_holiday():
+    h = _states(("calendar.a_holidays", 1, "Holidays in US"), ("calendar.b_ro", 0, None),
+                ("calendar.c_family", 1, None), ("calendar.d_family", 1, None))
+    assert make(h).find_calendar() == "calendar.c_family"
+
+
+def test_find_calendar_then_non_holiday_then_any():
+    h = _states(("calendar.a_birthdays", 1, None), ("calendar.b_ro", 0, None), ("calendar.c_x", 0, None))
+    assert make(h).find_calendar() == "calendar.b_ro"
+    h = _states(("calendar.z_holiday", 0, None), ("calendar.b_birthdays", 1, "Birthdays"))
+    assert make(h).find_calendar() == "calendar.b_birthdays"
+    h = _states(("calendar.a", 0, "Our Holiday plans"), ("calendar.b", 1, "Family"))
+    assert make(h).find_calendar() == "calendar.b"
+
+
+def test_find_calendar_logs_choice_on_change(caplog):
+    import logging
+    clock = Clock()
+    ha = make(_states(("calendar.a", 1, None)), clock)
+    with caplog.at_level(logging.WARNING):
+        ha.find_calendar()
+        clock.now = NOW + timedelta(minutes=6)
+        ha.find_calendar()
+    assert len([r for r in caplog.records if "calendar.a" in r.getMessage()]) == 1
