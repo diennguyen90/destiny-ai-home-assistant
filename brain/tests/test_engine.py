@@ -8,6 +8,7 @@ from destiny_brain.config import Settings
 from destiny_brain.costs import Usage
 from destiny_brain.engine import ERROR_LINE, ConverseRequest, Engine
 from destiny_brain.ha import HAClient
+from destiny_brain.household import HOUSEHOLD_TOOLS
 from destiny_brain.prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL
 from destiny_brain.providers.base import HEARTBEAT, SEARCH_STARTED, ProviderError
 from destiny_brain.store import RequestRecord, Store
@@ -32,7 +33,8 @@ class Clock:
 @pytest.fixture
 def env(tmp_path):
     settings = Settings(anthropic_api_key="k", brain_shared_key="s", parent_pin="1",
-                        tz="America/Los_Angeles", notify_service="mobile_app_x")
+                        tz="America/Los_Angeles", notify_service="mobile_app_x",
+                        reminder_notify_service="notify.phone")
     store = Store(str(tmp_path / "b.db"), settings.tz)
     store.init()
     return settings, store
@@ -70,7 +72,7 @@ def test_simple_question_tier1(env):
     assert r.speech == "It is four."
     assert len(p.calls) == 1 and p.calls[0]["model"] == "claude-haiku-5-5"
     assert p.calls[0]["effort"] == "low" and p.calls[0]["max_tokens"] == 1024
-    assert [t.name for t in p.calls[0]["tools"]] == ["needs_deeper_answer"]
+    assert [t.name for t in p.calls[0]["tools"]] == ["needs_deeper_answer", *[t.name for t in HOUSEHOLD_TOOLS]]
     assert store.recent()[0].cost_usd > 0
 
 
@@ -78,7 +80,7 @@ def test_keyword_goes_tier2(env):
     e, p, *_ = build(env, make_result("Because.", model="claude-sonnet-5-5"))
     e.handle(req("explain the water cycle"))
     assert len(p.calls) == 1 and p.calls[0]["model"] == "claude-sonnet-5-5"
-    assert p.calls[0]["tools"] == [] and p.calls[0]["effort"] == "medium"
+    assert p.calls[0]["tools"] == list(HOUSEHOLD_TOOLS) and p.calls[0]["effort"] == "medium"
 
 
 def test_escalation_runs_sonnet_and_logs_two_records(env):
@@ -87,7 +89,7 @@ def test_escalation_runs_sonnet_and_logs_two_records(env):
     e, p, store, *_ = build(env, esc, make_result("Deep answer.", model="claude-sonnet-5-5"))
     cid = e.handle(req("what is a black hole")).conversation_id
     assert [c["model"] for c in p.calls] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
-    assert p.calls[1]["tools"] == []
+    assert p.calls[1]["tools"] == list(HOUSEHOLD_TOOLS)
     assert p.calls[0]["messages"] == p.calls[1]["messages"]
     recs = store.recent()
     assert len(recs) == 2
@@ -412,7 +414,7 @@ def test_stream_tier2_filler_then_deltas(env):
     e, p, *_ = sbuild(env, streams=[(["Because ", "light scatters."], res)])
     deltas, end = run(e, req("explain the water cycle"))
     assert deltas == [FILLERS[0] + " ", "Because ", "light scatters."]
-    assert p.stream_calls[0]["model"] == "claude-sonnet-5-5" and p.stream_calls[0]["tools"] == []
+    assert p.stream_calls[0]["model"] == "claude-sonnet-5-5" and p.stream_calls[0]["tools"] == list(HOUSEHOLD_TOOLS)
     assert p.calls == []
 
 
@@ -575,7 +577,7 @@ def test_tier2_calls_get_web_search_blocking(env):
 def test_tier1_has_no_server_tools(env):
     e, p, *_ = build(env, make_result("Four."))
     e.handle(req("what is two plus two"))
-    assert not p.calls[0]["server_tools"] and p.calls[0]["tools"] == [ESCALATE_TOOL]
+    assert not p.calls[0]["server_tools"] and p.calls[0]["tools"] == [ESCALATE_TOOL, *HOUSEHOLD_TOOLS]
 
 
 def test_tier2_stream_gets_web_search(env):
@@ -831,3 +833,179 @@ def test_soft_cap_still_downgrades_without_search_blocks(env):
     spend(store, env[0].soft_cap_usd + 0.01)
     e.handle(req("and more", cid="c"))
     assert store.recent()[0].tier == 1 and store.recent()[0].route_reason == "soft_cap"
+
+
+# -- household tool loop --
+
+def _tool_use(name, args, text=""):
+    return make_result(text, tool_calls=[(name, args)], stop_reason="tool_use")
+
+
+def test_tier1_runs_household_tool_then_answers(env):
+    e, p, store, *_ = build(env, _tool_use("set_reminder", {"message": "Call grandma", "in_minutes": 30}),
+                            make_result("Okay, reminder set for 5 PM."))
+    r = e.handle(req("remind me to call grandma", "c1"))
+    assert r.speech == "Okay, reminder set for 5 PM."
+    assert len(p.calls) == 2 and len(store.pending_reminders()) == 1
+    last = p.calls[1]["messages"][-1]
+    assert last["role"] == "user" and last["content"][0]["type"] == "tool_result"
+    assert last["content"][0]["tool_use_id"] == "tu_1" and last["content"][0]["is_error"] is False
+    assert p.calls[1]["messages"][-2]["role"] == "assistant"
+    e.handle(req("thanks", "c1"))
+    hist = p.calls[2]["messages"]
+    assert [m["role"] for m in hist] == ["user", "system", "assistant", "user", "assistant", "user", "system"]
+    assert hist[:4] == p.calls[1]["messages"][:4] and hist[3]["content"][0]["type"] == "tool_result"
+    assert hist[4]["content"] == [{"type": "text", "text": "Okay, reminder set for 5 PM."}]
+    assert len(store.recent()) == 3
+
+
+def test_escalation_wins_over_household_tools(env):
+    both = make_result("", tool_calls=[("set_reminder", {"message": "x", "in_minutes": 5}),
+                                       ("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    e, p, store, *_ = build(env, both, make_result("Deep.", model="claude-sonnet-5-5"))
+    r = e.handle(req("remind me why the sky is blue"))
+    assert r.speech == "Deep." and p.calls[1]["model"] == "claude-sonnet-5-5"
+    assert store.pending_reminders() == []
+    assert p.calls[1]["tools"] == list(HOUSEHOLD_TOOLS)
+    assert p.calls[1]["server_tools"] == [WEB_SEARCH_TOOL]
+
+
+def test_tool_rounds_capped(env):
+    e, p, store, *_ = build(env, *[_tool_use("bogus", {}) for _ in range(5)])
+    r = e.handle(req("what are my reminders", "c1"))
+    assert r.speech == ERROR and len(p.calls) == 4
+    e.handle(req("hello", "c1"))
+    assert len(p.calls[4]["messages"]) == 2  # nothing stored
+
+
+def test_unknown_tool_gets_error_result(env):
+    e, p, *_ = build(env, _tool_use("bogus", {}), make_result("Sorry, can't."))
+    assert e.handle(req("remind me")).speech == "Sorry, can't."
+    assert p.calls[1]["messages"][-1]["content"][0]["is_error"] is True
+
+
+def test_tier2_blocking_tool_round_text_joined(env):
+    e, p, store, *_ = build(
+        env, _tool_use("set_reminder", {"message": "x", "in_minutes": 5}, "Setting it."),
+        make_result("Done.", model="claude-sonnet-5-5"))
+    r = e.handle(req("explain the water cycle", "c1"))
+    assert r.speech == "Setting it. Done." and len(p.calls) == 2
+
+
+def test_tier2_stream_tool_round(env):
+    first = make_result("Let me set that.", model="claude-sonnet-5-5", stop_reason="tool_use",
+                        tool_calls=[("set_reminder", {"message": "x", "in_minutes": 5})])
+    second = make_result("All set.", model="claude-sonnet-5-5")
+    e, p, store, _ = sbuild(env, streams=[(["Let me set that."], first), (["All set."], second)])
+    events = list(e.handle_stream(req("explain the water cycle", "c1")))
+    kinds = [x["type"] for x in events]
+    assert kinds[:3] == ["delta", "delta", "ping"] and kinds[-1] == "end" and kinds.count("ping") == 1
+    assert events[-1]["speech"].count(FILLERS[0]) == 1 and events[-1]["speech"].endswith("All set.")
+    assert len(store.pending_reminders()) == 1
+    assert p.stream_calls[0]["tools"] == list(HOUSEHOLD_TOOLS)
+    assert p.stream_calls[0]["server_tools"] == [WEB_SEARCH_TOOL]
+    assert p.stream_calls[1]["messages"][-1]["content"][0]["type"] == "tool_result"
+
+
+class _AdvancingHousehold:
+    """Fake household: returns a fixed sentence and moves the clock forward."""
+
+    def __init__(self, clock, jump=0):
+        self.clock, self.jump = clock, jump
+
+    def run(self, name, args):
+        self.clock.now += timedelta(seconds=self.jump)
+        return "Reminder set for 5 PM.", False
+
+
+def test_escalation_after_tool_round_does_not_rerun_tools(env):
+    settings, store = env
+    r1 = _tool_use("set_reminder", {"message": "x", "in_minutes": 5})
+    r2 = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    p = FakeProvider(r1, r2, make_result("Deep.", model="claude-sonnet-5-5"))
+    e = Engine(settings, store, p, FakeHA(), clock=Clock())
+    assert e.handle(req("remind me to read")).speech == "Deep."
+    assert len(store.pending_reminders()) == 1 and len(p.calls) == 3
+    last = p.calls[2]["messages"][-1]
+    assert last["content"][0]["type"] == "tool_result" and p.calls[2]["model"] == "claude-sonnet-5-5"
+
+
+def test_stream_escalation_after_tool_round_resumes_chain(env):
+    settings, store = env
+    r1 = _tool_use("set_reminder", {"message": "x", "in_minutes": 5})
+    r2 = make_result("", tool_calls=[("needs_deeper_answer", {"reason": "x"})], stop_reason="tool_use")
+    p = FakeProvider(r1, r2, streams=[(["Deep."], make_result("Deep.", model="claude-sonnet-5-5"))])
+    e = Engine(settings, store, p, FakeHA(), clock=Clock(), fillers=FixedFillers())
+    _, end = run(e, req("remind me to read"))
+    assert len(store.pending_reminders()) == 1
+    assert p.stream_calls[0]["messages"][-1]["content"][0]["type"] == "tool_result"
+    assert end["speech"].endswith("Deep.")
+
+
+def test_deadline_after_tool_round_speaks_tool_result(env):
+    settings, store = env
+    clock = Clock()
+    p = FakeProvider(_tool_use("set_reminder", {"message": "x", "in_minutes": 5}))
+    e = Engine(settings, store, p, FakeHA(), clock=clock, household=_AdvancingHousehold(clock, 20))
+    r = e.handle(req("remind me to read", "c1"))
+    assert r.speech == "Reminder set for 5 PM." and len(p.calls) == 1
+    clock.now = T0
+    e.handle(req("hi", "c1"))
+    assert len(p.calls[-1]["messages"]) == 2  # nothing stored
+
+
+def test_stream_deadline_after_tool_round_speaks_tool_result(env):
+    settings, store = env
+    clock = Clock()
+    first = make_result("", model="claude-sonnet-5-5", stop_reason="tool_use",
+                        tool_calls=[("set_reminder", {"message": "x", "in_minutes": 5})])
+    p = FakeProvider(streams=[([], first)])
+    e = Engine(settings, store, p, FakeHA(), clock=clock, fillers=FixedFillers(),
+               household=_AdvancingHousehold(clock, 20))
+    _, end = run(e, req("explain the water cycle"))
+    assert end["speech"].endswith("Reminder set for 5 PM.") and len(p.stream_calls) == 1
+
+
+def test_stream_tool_rounds_capped(env):
+    settings, store = env
+    clock = Clock()
+    streams = [([], make_result("", model="claude-sonnet-5-5", stop_reason="tool_use",
+                                tool_calls=[("list_reminders", {})])) for _ in range(5)]
+    p = FakeProvider(streams=streams)
+    e = Engine(settings, store, p, FakeHA(), clock=clock, fillers=FixedFillers(),
+               household=_AdvancingHousehold(clock, 0))
+    events = list(e.handle_stream(req("explain the water cycle", "c1")))
+    assert len(p.stream_calls) == 4
+    assert [x["type"] for x in events].count("ping") == 3
+    assert events[-1]["speech"].endswith("Reminder set for 5 PM.") and events[-1]["continue_conversation"] is False
+
+
+def test_empty_text_after_tool_round_speaks_tool_result(env):
+    e, p, store, *_ = build(env, _tool_use("set_reminder", {"message": "x", "in_minutes": 5}), make_result(""))
+    r = e.handle(req("remind me to x", "c1"))
+    assert r.speech.startswith("Reminder set for") and r.speech != ERROR
+    e.handle(req("hi", "c1"))
+    assert len(p.calls[-1]["messages"]) == 2  # nothing stored
+
+
+def test_stream_empty_text_after_tool_round_speaks_tool_result(env):
+    settings, store = env
+    first = make_result("", model="claude-sonnet-5-5", stop_reason="tool_use",
+                        tool_calls=[("set_reminder", {"message": "x", "in_minutes": 5})])
+    second = make_result("", model="claude-sonnet-5-5")
+    p = FakeProvider(streams=[([], first), ([], second)])
+    e = Engine(settings, store, p, FakeHA(), clock=Clock(), fillers=FixedFillers())
+    _, end = run(e, req("explain the water cycle"))
+    assert "Reminder set for" in end["speech"] and "went wrong" not in end["speech"]
+    assert "lost my train" not in end["speech"]
+
+
+def test_unanswered_tool_use_in_final_content_not_stored(env):
+    partial = make_result("Setting it", stop_reason="max_tokens",
+                          content=[{"type": "text", "text": "Setting it"},
+                                   {"type": "tool_use", "id": "tu_9", "name": "set_reminder", "input": {}}])
+    e, p, *_ = build(env, partial, make_result("ok"))
+    r = e.handle(req("hello", "c1"))
+    assert r.speech == "Setting it"
+    e.handle(req("again", "c1"))
+    assert [m["role"] for m in p.calls[1]["messages"]] == ["user", "system"]

@@ -10,8 +10,9 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .fillers import FillerPicker
 from .costs import Usage, cost_usd
+from .fillers import FillerPicker
+from .household import HOUSEHOLD_TOOLS, Household
 from .prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL, context_block
 from .providers.base import HEARTBEAT, SEARCH_STARTED, ProviderResult
 from .router import clean_text, route
@@ -30,6 +31,7 @@ MAX_CONVERSATION_ID = 128
 TOTAL_BUDGET_S = 13.5
 MIN_CALL_S = 1.0
 HISTORY_TTL = timedelta(minutes=10)
+MAX_TOOL_ROUNDS = 3
 
 
 @dataclass
@@ -84,13 +86,14 @@ class _Conversation:
 
 class Engine:
     def __init__(self, settings: Settings, store, provider, ha, clock=lambda: datetime.now(UTC),
-                 fillers=None):
+                 fillers=None, household=None):
         self._s = settings
         self._store = store
         self._provider = provider
         self._ha = ha
         self._clock = clock
         self._fillers = fillers or FillerPicker()
+        self._household = household or Household(settings, store, ha, clock)
         self._tz = ZoneInfo(settings.tz)
         self._lock = threading.Lock()
         self._convs: dict[str, _Conversation] = {}
@@ -176,33 +179,71 @@ class Engine:
             return plan
         tier, reason = plan.tier, plan.reason
         result: ProviderResult | None = None
+        chain = plan.messages
         try:
             if tier == 1:
-                result = self._tier1(plan)
+                result, chain = self._run_blocking(plan, 1, reason)
                 if self._escalated(result):
-                    tier, reason, result = 2, "escalated", None
+                    tier, reason, result = 2, "escalated", None  # tier 2 resumes from chain: tools never re-run
             if result is None:
-                result = self._call_paused(plan, tier, reason)
+                result, chain = self._run_blocking(plan, tier, reason, chain)
         except Exception as exc:
             return self._fail(exc, plan, tier, reason)
-        return self._finish(plan, tier, reason, result)
-
-    def _call_paused(self, plan: _Plan, tier: int, reason: str) -> ProviderResult:
-        """Tier-2 call; a pause_turn is continued once (if time allows) and merged into one result."""
-        first = self._call(tier, reason, plan.system, plan.messages, [], plan.cid, plan.req, plan.chars, plan.now)
-        if first.stop_reason != "pause_turn":
-            return first
-        try:
-            second = self._call(tier, reason, plan.system, self._continuation(plan, first), [], plan.cid,
-                                plan.req, plan.chars, plan.now)
-        except _DeadlineExceeded:
-            log.warning("pause_turn not continued: deadline")
-            return first
-        return self._merge(first, second)
+        return self._finish(replace(plan, messages=chain), tier, reason, result)
 
     @staticmethod
-    def _continuation(plan: _Plan, first: ProviderResult) -> list[dict]:
-        return plan.messages + [{"role": "assistant", "content": first.content}]
+    def _tools(tier: int) -> list:
+        return [ESCALATE_TOOL, *HOUSEHOLD_TOOLS] if tier == 1 else list(HOUSEHOLD_TOOLS)
+
+    def _run_blocking(self, plan: _Plan, tier: int, reason: str,
+                      start: list[dict] | None = None) -> tuple[ProviderResult, list[dict]]:
+        """Model call plus household tool rounds and one pause_turn continuation, merged into one result.
+
+        Returns (result, messages that produced the final call); history is that chain plus result.content.
+        A tier-1 result that escalates is returned as is.
+        """
+        messages, acc, rounds, paused = start or plan.messages, None, 0, False
+        tools = self._tools(tier)
+        while True:
+            try:
+                result = self._call(tier, reason, plan.system, messages, tools, plan.cid, plan.req, plan.chars,
+                                    plan.now)
+            except _DeadlineExceeded:
+                if acc is None:
+                    raise
+                log.warning("continuation skipped: deadline")
+                return acc, messages
+            if tier == 1 and self._escalated(result):
+                return result, messages
+            acc = self._accumulate(acc, result)
+            step = self._advance(result, messages, tier, rounds, paused)
+            if step is None:
+                return acc, messages
+            messages, rounds, paused = step
+
+    @staticmethod
+    def _accumulate(acc: ProviderResult | None, result: ProviderResult) -> ProviderResult:
+        if acc is None:
+            return result
+        return replace(Engine._merge(acc, result), content=result.content)  # history keeps only the last turn
+
+    def _advance(self, result: ProviderResult, messages: list[dict], tier: int, rounds: int,
+                 paused: bool) -> tuple[list[dict], int, bool] | None:
+        """Decide what follows a result: None when done (or out of rounds), else the next messages."""
+        if result.stop_reason == "tool_use":
+            uses = [b for b in result.content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            if not uses or rounds >= MAX_TOOL_ROUNDS:
+                return None
+            blocks = []
+            for b in uses:
+                text, is_err = self._household.run(b.get("name", ""), b.get("input") or {})
+                blocks.append({"type": "tool_result", "tool_use_id": b.get("id"), "content": text,
+                               "is_error": is_err})
+            return (messages + [{"role": "assistant", "content": result.content},
+                                {"role": "user", "content": blocks}], rounds + 1, paused)
+        if result.stop_reason == "pause_turn" and tier == 2 and not paused:
+            return messages + [{"role": "assistant", "content": result.content}], rounds, True
+        return None
 
     @staticmethod
     def _merge(first: ProviderResult, second: ProviderResult) -> ProviderResult:
@@ -219,10 +260,6 @@ class Engine:
     def _escalated(result: ProviderResult) -> bool:
         return any(name == ESCALATE_TOOL.name for name, _ in result.tool_calls)
 
-    def _tier1(self, plan: _Plan) -> ProviderResult:
-        return self._call(1, plan.reason, plan.system, plan.messages, [ESCALATE_TOOL], plan.cid, plan.req,
-                          plan.chars, plan.now)
-
     def _fail(self, exc: Exception, plan: _Plan, tier: int, reason: str) -> ConverseResponse:
         if isinstance(exc, _DeadlineExceeded):
             log.warning("model call skipped: deadline")
@@ -236,20 +273,43 @@ class Engine:
         cid, req, chars = plan.cid, plan.req, plan.chars
         if result.stop_reason == "refusal":
             return self._respond(REFUSAL_LINE, cid, req, tier, result.model, reason, "refusal", chars, log_it=False)
-        if result.stop_reason == "pause_turn":  # could not be continued: speak what we have, store nothing
+        if result.stop_reason in ("pause_turn", "tool_use"):  # unfinished: speak what we have, store nothing
             if result.text.strip():
                 return ConverseResponse(result.text, cid, False)
+            done = self._last_tool_texts(plan.messages)
+            if done:
+                return ConverseResponse(done, cid, False)
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":paused", "error", chars)
         if not result.text.strip():
+            done = self._last_tool_texts(plan.messages)  # tool round succeeded: never say "error" (no duplicates)
+            if done:
+                return ConverseResponse(done, cid, False)
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error", chars)
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in result.content):
+            return ConverseResponse(result.text, cid, False)  # unanswered tool_use: store nothing
         with self._lock:
             conv = self._convs.get(cid)
             if conv is not None:
-                conv.history = plan.messages + [{"role": "assistant", "content": result.content}]
+                conv.history = self._history(plan.messages, result.content)
                 conv.last_ts = self._clock()
                 conv.tier = tier
         speech = result.text
         return ConverseResponse(speech, cid, speech.rstrip().endswith("?"))
+
+    @staticmethod
+    def _last_tool_texts(chain: list[dict]) -> str:
+        """Spoken-friendly results of the last completed tool round (the chain ends with them)."""
+        last = chain[-1] if chain else None
+        if not last or last["role"] != "user" or not isinstance(last["content"], list):
+            return ""
+        return " ".join(b["content"] for b in last["content"]
+                        if b.get("type") == "tool_result" and not b.get("is_error") and b.get("content"))
+
+    @staticmethod
+    def _history(chain: list[dict], content: list) -> list[dict]:
+        if chain and chain[-1]["role"] == "assistant":  # pause_turn continuation: one assistant turn
+            return chain[:-1] + [{"role": "assistant", "content": chain[-1]["content"] + content}]
+        return chain + [{"role": "assistant", "content": content}]
 
     def _stream(self, req: ConverseRequest, st: _StreamState) -> Iterator[str]:
         """Yields spoken text pieces; sets st.cid / st.cont / st.model_text."""
@@ -260,26 +320,28 @@ class Engine:
             return
         st.cid = plan.cid
         tier, reason = plan.tier, plan.reason
+        start = plan.messages
         if tier == 1:
             try:
-                result = self._tier1(plan)
+                result, chain = self._run_blocking(plan, 1, reason)
             except Exception as exc:
                 yield self._fail(exc, plan, 1, reason).speech
                 return
             if not self._escalated(result):
-                resp = self._finish(plan, 1, reason, result)
+                resp = self._finish(replace(plan, messages=chain), 1, reason, result)
                 st.cont = resp.continue_conversation
                 yield resp.speech
                 return
             tier, reason = 2, "escalated"
+            start = chain
         yield self._fillers.pick(req.device_id, "web" if reason == "live" else "normal") + " "
         try:
-            result = yield from self._stream_paused(plan, tier, reason, st)
+            result, chain = yield from self._stream_loop(plan, tier, reason, st, start)
         except Exception as exc:
             resp = self._fail(exc, plan, tier, reason)
             yield LOST_LINE if st.model_text else resp.speech
             return
-        resp = self._finish(plan, tier, reason, result)
+        resp = self._finish(replace(plan, messages=chain), tier, reason, result)
         st.cont = resp.continue_conversation
         if st.model_text and resp.speech != result.text:
             st.cont = False  # refusal/empty after partial speech: nothing was committed to history
@@ -287,18 +349,25 @@ class Engine:
         elif not st.model_text:
             yield resp.speech
 
-    def _stream_paused(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
-        """Streamed tier-2 call; a pause_turn is continued once (streaming too) and merged."""
-        first = yield from self._stream_call(plan, tier, reason, st, plan.messages)
-        if first.stop_reason != "pause_turn":
-            return first
-        st.seam_pending = bool(st.last_text) and not st.last_text[-1].isspace()
-        try:
-            second = yield from self._stream_call(plan, tier, reason, st, self._continuation(plan, first))
-        except _DeadlineExceeded:
-            log.warning("pause_turn not continued: deadline")
-            return first
-        return self._merge(first, second)
+    def _stream_loop(self, plan: _Plan, tier: int, reason: str, st: _StreamState,
+                     start: list[dict]) -> Iterator[str]:
+        """Streamed counterpart of _run_blocking. Returns (result, messages of the final call)."""
+        messages, acc, rounds, paused = start, None, 0, False
+        while True:
+            try:
+                result = yield from self._stream_call(plan, tier, reason, st, messages)
+            except _DeadlineExceeded:
+                if acc is None:
+                    raise
+                log.warning("continuation skipped: deadline")
+                return acc, messages
+            acc = self._accumulate(acc, result)
+            step = self._advance(result, messages, tier, rounds, paused)
+            if step is None:
+                return acc, messages
+            yield HEARTBEAT  # every continuation: keep the connection alive
+            st.seam_pending = bool(st.last_text) and not st.last_text[-1].isspace()
+            messages, rounds, paused = step
 
     def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState,
                      messages: list[dict]) -> Iterator[str]:
@@ -310,8 +379,9 @@ class Engine:
             raise _DeadlineExceeded()
         call_start = time.monotonic()
         gen = self._provider.stream(
-            model=model, system=plan.system, messages=messages, tools=[], effort=effort, max_tokens=1024,
-            timeout=max(MIN_CALL_S, remaining), server_tools=[WEB_SEARCH_TOOL] if tier == 2 else None,
+            model=model, system=plan.system, messages=messages, tools=self._tools(tier), effort=effort,
+            max_tokens=1024, timeout=max(MIN_CALL_S, remaining),
+            server_tools=[WEB_SEARCH_TOOL] if tier == 2 else None,
         )
         first_ms = None
         result: ProviderResult | None = None

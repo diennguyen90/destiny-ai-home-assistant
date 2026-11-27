@@ -18,7 +18,10 @@ DESTINY_BASE = (
     "If a search finds nothing current, say so briefly instead of guessing. Keep search results "
     "family-friendly, and decline or soften adult or violent news when talking with a child. "
     "Never announce that you are searching or looking something up; the app already says that, so "
-    "just give the answer."
+    "just give the answer. "
+    "Use your tools for reminders and the family calendar. Never say a reminder or event is set unless "
+    "the tool confirmed it, and confirm briefly with the day and time. You can only set one-time "
+    "reminders for now. When reading calendar events, say them naturally in a sentence or two."
 )
 
 WEB_SEARCH_TOOL: dict = {

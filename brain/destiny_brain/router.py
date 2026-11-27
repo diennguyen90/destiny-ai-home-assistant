@@ -35,6 +35,9 @@ LIVE_TIME_RE = re.compile(
 LIVE_EVENT_RE = re.compile(
     r"\b(?:games?|match|plays?|playing|played|won|win|lost|beat|kickoff|schedule)\b"
 )
+HOUSEHOLD_RE = re.compile(
+    r"\b(?:remind|reminders?|calendar|appointments?)\b|\b(?:my|our) schedule\b"
+)
 # Weather is already in the context block, so weather questions never trigger a search.
 WEATHER_RE = re.compile(
     r"\b(?:weather|forecast|rain|snow|temperature|hot|cold|sunny|wind|humid)\b"
@@ -66,6 +69,8 @@ def route(text: str, previous_tier: int | None) -> RouteDecision:
     if previous_tier == 2:
         return RouteDecision(2, "sticky")
     lowered = text.lower()
+    if HOUSEHOLD_RE.search(lowered) and not LIVE_TEAM_RE.search(CHICKEN_NUGGETS_RE.sub(" ", lowered)):
+        return RouteDecision(1, "household")
     if _is_live(lowered) and not WEATHER_RE.search(lowered):
         return RouteDecision(2, "live")
     if any(k in lowered for k in KEYWORDS):

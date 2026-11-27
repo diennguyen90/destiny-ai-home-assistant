@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 from string import Template
@@ -79,7 +80,18 @@ def _dashboard(settings: Settings, store: Any) -> str:
 
 
 def create_app(settings: Settings, deps: Any = None) -> FastAPI:
-    app = FastAPI(title="Destiny brain")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        sched = getattr(deps, "scheduler", None)
+        if sched is not None:
+            sched.start()
+        try:
+            yield
+        finally:
+            if sched is not None:
+                await run_in_threadpool(sched.stop)
+
+    app = FastAPI(title="Destiny brain", lifespan=lifespan)
     app.state.settings = settings
     app.state.deps = deps
     sessions: dict[str, float] = {}

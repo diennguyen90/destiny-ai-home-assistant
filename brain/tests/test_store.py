@@ -122,3 +122,35 @@ def test_store_migrates_web_searches(tmp_path):
     got = {r.conversation_id: r for r in s.recent()}
     assert got["new"].web_searches == 2
     assert got["old"].web_searches is None
+
+
+def test_reminder_round_trip(store):
+    now = utc(2026, 11, 26, 12, 0)
+    late = store.add_reminder("later", utc(2026, 11, 26, 15, 0), now)
+    early = store.add_reminder("early", utc(2026, 11, 26, 13, 0), now)
+    assert store.pending_count() == 2
+    assert [r.id for r in store.pending_reminders()] == [early, late]
+    assert store.pending_reminders(limit=1)[0].message == "early"
+    assert store.due_reminders(utc(2026, 11, 26, 12, 30)) == []
+    due = store.due_reminders(utc(2026, 11, 26, 13, 0))
+    assert [r.id for r in due] == [early]
+    assert due[0].status == "pending" and due[0].attempts == 0 and due[0].sent_utc is None
+    assert store.cancel_reminder(late) is True
+    assert store.cancel_reminder(late) is False
+    assert store.pending_count() == 1
+    assert store.bump_reminder_attempts(early) == 1
+    assert store.bump_reminder_attempts(early) == 2
+    sent_at = utc(2026, 11, 26, 13, 1)
+    store.mark_reminder(early, "sent", sent_at)
+    assert store.pending_count() == 0
+    assert store.cancel_reminder(early) is False
+    rows = store._exec("SELECT status, sent_utc, attempts FROM reminders WHERE id = ?", (early,))
+    assert rows[0][0] == "sent" and datetime.fromisoformat(rows[0][1]) == sent_at and rows[0][2] == 2
+
+
+def test_mark_reminder_does_not_overwrite_cancelled(store):
+    now = utc(2026, 11, 26, 12, 0)
+    rid = store.add_reminder("x", utc(2026, 11, 26, 13, 0), now)
+    assert store.cancel_reminder(rid) is True
+    store.mark_reminder(rid, "sent", now)
+    assert store._exec("SELECT status, sent_utc FROM reminders WHERE id = ?", (rid,))[0] == ("cancelled", None)

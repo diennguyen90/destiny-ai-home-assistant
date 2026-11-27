@@ -26,6 +26,17 @@ class RequestRecord:
     web_searches: int | None = None
 
 
+@dataclass
+class Reminder:
+    id: int
+    message: str
+    due_utc: datetime
+    status: str  # pending | sent | cancelled | expired | failed
+    attempts: int
+    created_utc: datetime
+    sent_utc: datetime | None = None
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +60,16 @@ CREATE TABLE IF NOT EXISTS flags (
     day TEXT PRIMARY KEY,
     soft_cap_notified INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message TEXT NOT NULL,
+    due_utc TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_utc TEXT NOT NULL,
+    sent_utc TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_status_due ON reminders(status, due_utc);
 """
 
 
@@ -149,3 +170,74 @@ class Store:
             " ON CONFLICT(day) DO UPDATE SET soft_cap_notified = 1",
             (day.isoformat(),),
         )
+
+    _REMINDER_COLS = "id, message, due_utc, status, attempts, created_utc, sent_utc"
+
+    @staticmethod
+    def _reminder(r: tuple) -> Reminder:
+        return Reminder(
+            id=r[0], message=r[1], due_utc=datetime.fromisoformat(r[2]), status=r[3],
+            attempts=r[4], created_utc=datetime.fromisoformat(r[5]),
+            sent_utc=datetime.fromisoformat(r[6]) if r[6] else None,
+        )
+
+    def add_reminder(self, message: str, due_utc: datetime, now_utc: datetime) -> int:
+        c = self._connect()
+        try:
+            with self._lock, c:
+                cur = c.execute(
+                    "INSERT INTO reminders (message, due_utc, status, attempts, created_utc)"
+                    " VALUES (?, ?, 'pending', 0, ?)",
+                    (message, _iso(due_utc), _iso(now_utc)),
+                )
+                return int(cur.lastrowid)
+        finally:
+            c.close()
+
+    def pending_reminders(self, limit: int = 10) -> list[Reminder]:
+        rows = self._exec(
+            f"SELECT {self._REMINDER_COLS} FROM reminders WHERE status = 'pending'"
+            " ORDER BY due_utc ASC, id ASC LIMIT ?",
+            (limit,),
+        )
+        return [self._reminder(r) for r in rows]
+
+    def pending_count(self) -> int:
+        return int(self._exec("SELECT COUNT(*) FROM reminders WHERE status = 'pending'")[0][0])
+
+    def due_reminders(self, now_utc: datetime) -> list[Reminder]:
+        rows = self._exec(
+            f"SELECT {self._REMINDER_COLS} FROM reminders WHERE status = 'pending' AND due_utc <= ?"
+            " ORDER BY due_utc ASC, id ASC",
+            (_iso(now_utc),),
+        )
+        return [self._reminder(r) for r in rows]
+
+    def cancel_reminder(self, rid: int) -> bool:
+        c = self._connect()
+        try:
+            with self._lock, c:
+                cur = c.execute(
+                    "UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
+                    (rid,),
+                )
+                return cur.rowcount > 0
+        finally:
+            c.close()
+
+    def mark_reminder(self, rid: int, status: str, now_utc: datetime) -> None:
+        self._exec(
+            "UPDATE reminders SET status = ?, sent_utc = CASE WHEN ? = 'sent' THEN ? ELSE sent_utc END"
+            " WHERE id = ? AND status = 'pending'",
+            (status, status, _iso(now_utc), rid),
+        )
+
+    def bump_reminder_attempts(self, rid: int) -> int:
+        c = self._connect()
+        try:
+            with self._lock, c:
+                c.execute("UPDATE reminders SET attempts = attempts + 1 WHERE id = ?", (rid,))
+                row = c.execute("SELECT attempts FROM reminders WHERE id = ?", (rid,)).fetchone()
+                return int(row[0]) if row else 0
+        finally:
+            c.close()

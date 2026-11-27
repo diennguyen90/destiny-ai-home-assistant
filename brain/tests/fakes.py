@@ -6,7 +6,8 @@ def make_result(text="Hello there.", model="claude-haiku-5-5", stop_reason="end_
                 tool_calls=None, usage=Usage(100, 20), content=None):
     content = content or [{"type": "text", "text": text}]
     if tool_calls:
-        content = [{"type": "tool_use", "id": "tu_1", "name": n, "input": i} for n, i in tool_calls]
+        content = [{"type": "tool_use", "id": f"tu_{k}", "name": n, "input": i}
+                   for k, (n, i) in enumerate(tool_calls, 1)]
     return ProviderResult(text=text, content=content, tool_calls=list(tool_calls or []),
                           stop_reason=stop_reason, usage=usage, model=model)
 
@@ -61,6 +62,10 @@ class FakeHA:
         self.weather = weather
         self.forecast = forecast
         self.notifications = []
+        self.calendar = "calendar.family"
+        self.events = []
+        self.created = []
+        self.notify_ok = True
 
     def weather_line(self, entity_id):
         return self.weather
@@ -70,4 +75,14 @@ class FakeHA:
 
     def notify(self, service, title, message):
         self.notifications.append((service, title, message))
+        return self.notify_ok
+
+    def find_calendar(self, preferred=""):
+        return preferred or self.calendar
+
+    def calendar_events(self, entity_id, start, end):
+        return self.events
+
+    def create_calendar_event(self, entity_id, summary, **kw):
+        self.created.append(dict(entity_id=entity_id, summary=summary, **kw))
         return True

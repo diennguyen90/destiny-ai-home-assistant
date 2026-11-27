@@ -30,6 +30,8 @@ class Settings:
     ha_token: str = ""
     ha_weather_entity: str = "weather.home"
     notify_service: str = ""
+    reminder_notify_service: str = ""
+    calendar_entity: str = ""
     tz: str = "Etc/UTC"
     db_path: str = "/data/brain.db"
     soft_cap_usd: float = 1.0
@@ -57,6 +59,8 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         ha_token=g("BRAIN_HA_TOKEN") or "",
         ha_weather_entity=g("HA_WEATHER_ENTITY") or "weather.home",
         notify_service=g("DESTINY_NOTIFY_SERVICE") or "",
+        reminder_notify_service=g("DESTINY_REMINDER_NOTIFY") or g("DESTINY_NOTIFY_SERVICE") or "",
+        calendar_entity=g("DESTINY_CALENDAR_ENTITY") or "",
         tz=g("TZ") or "Etc/UTC",
         db_path=g("DESTINY_DB_PATH") or "/data/brain.db",
         soft_cap_usd=float(g("DESTINY_SOFT_CAP_USD") or 1.0),
