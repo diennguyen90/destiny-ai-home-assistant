@@ -24,9 +24,6 @@ CAPPED_LINE = "I've done a lot of thinking today. Let's talk again tomorrow."
 ERROR_LINE = "Sorry, something went wrong in my head. Please try again."
 REFUSAL_LINE = "I can't help with that one. Let's ask a grown-up."
 LOST_LINE = " Sorry, I lost my train of thought."
-WEB_LINE = " Let me check the web real quick."
-# Spoken on the 2nd and 3rd search of one answer (before any model text) so the line never goes silent.
-BRIDGES = (" Still digging, almost there.", " Just a little longer, I'm nearly there.")
 
 MAX_TURNS = 12  # complete [user, system, assistant] turns kept before a fresh start
 MAX_CONVERSATION_ID = 128
@@ -73,12 +70,8 @@ class _StreamState:
     cid: str
     cont: bool = False
     model_text: bool = False
-    web_line: bool = False
-    searches: int = 0
-    bridges: int = 0
     last_text: str = ""
     seam_pending: bool = False
-    line_tail: str = ""  # last spoken non-model line (WEB_LINE / bridge) awaiting model text
     spoken: list[str] = field(default_factory=list)
 
 
@@ -333,17 +326,7 @@ class Engine:
                     yield HEARTBEAT
                     continue
                 if delta is SEARCH_STARTED:
-                    st.searches += 1
-                    if st.model_text:
-                        pass
-                    elif st.searches == 1 and reason != "live" and not st.web_line:
-                        st.web_line = True
-                        st.line_tail = WEB_LINE
-                        yield WEB_LINE  # spoken, but not model text and never stored in history
-                    elif st.searches >= 2 and st.bridges < len(BRIDGES):
-                        st.bridges += 1
-                        st.line_tail = BRIDGES[st.bridges - 1]
-                        yield BRIDGES[st.bridges - 1]  # keeps the connector's idle timer alive
+                    yield HEARTBEAT  # silent keep-alive (ping event); never spoken or stored
                     continue
                 if not delta:
                     continue
@@ -351,9 +334,6 @@ class Engine:
                     st.seam_pending = False
                     if not delta[0].isspace():
                         yield " "  # pause_turn continuation starts a new text block
-                elif st.line_tail and not st.line_tail[-1].isspace() and not delta[0].isspace():
-                    yield " "  # model text right after a spoken line
-                st.line_tail = ""
                 if first_ms is None:
                     first_ms = int((time.monotonic() - plan.mono0) * 1000)
                 st.model_text = True

@@ -206,7 +206,7 @@ First decide which of these you are seeing.
 
 ### She says a "thinking" phrase before answering
 
-That's on purpose. On longer questions she says a short filler ("Hmm, let me put my thinking cap on…") straight away, then streams the answer. On questions that need the internet she says a web filler instead ("One sec, I'm surfing through the web…"), and if a search takes a while she adds "Still digging, almost there." If the answer stream breaks partway through she says "Sorry, I lost my train of thought." and the turn isn't remembered: just ask again.
+That's on purpose. On longer questions she says a short filler ("Hmm, let me put my thinking cap on…") straight away, then streams the answer. On questions that need the internet she says a web filler instead ("One sec, I'm surfing through the web…"), and then stays quiet (silent keep-alive pings, no extra phrases) while she searches. If the answer stream breaks partway through she says "Sorry, I lost my train of thought." and the turn isn't remembered: just ask again.
 
 ### Internet answers (sports, news, schedules)
 

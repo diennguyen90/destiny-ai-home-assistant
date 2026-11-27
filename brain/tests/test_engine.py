@@ -6,7 +6,7 @@ import pytest
 
 from destiny_brain.config import Settings
 from destiny_brain.costs import Usage
-from destiny_brain.engine import BRIDGES, ERROR_LINE, ConverseRequest, Engine
+from destiny_brain.engine import ERROR_LINE, ConverseRequest, Engine
 from destiny_brain.ha import HAClient
 from destiny_brain.prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL
 from destiny_brain.providers.base import HEARTBEAT, SEARCH_STARTED, ProviderError
@@ -559,7 +559,6 @@ def test_stream_unexpected_error_is_logged_and_log_failure_is_safe(env):
 
 # -- web search --
 
-WEB_LINE = " Let me check the web real quick."
 SEARCH_CONTENT = [
     {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {"query": "nuggets"}},
     {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [{"type": "web_search_result"}]},
@@ -599,20 +598,38 @@ def test_stream_live_route_uses_web_filler(env):
     assert deltas[0] == WEB_FILLERS[0] + " " and deltas[1:] == ["Nuggets play at 7."]
 
 
-def test_stream_unplanned_search_line_once(env):
+def test_stream_non_live_search_before_text_only_filler(env):
     res = make_result("Answer.", model="claude-sonnet-5-5")
     e, p, store, _ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, "Answer."], res)])
     deltas, end = run(e, req("why is the sky blue"))
-    assert deltas == [FILLERS[0] + " ", WEB_LINE, BRIDGES[0], " ", "Answer."]
-    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + BRIDGES[0] + " Answer."
+    assert deltas == [FILLERS[0] + " ", "Answer."]
+    assert end["speech"] == FILLERS[0] + " Answer."
 
 
-def test_stream_web_line_never_enters_history(env):
+def test_stream_live_multi_search_one_filler_pings_each_search(env):
+    res = make_result("Nuggets win.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, SEARCH_STARTED, "Nuggets win."], res)])
+    events = list(e.handle_stream(req("do the nuggets play tonight")))
+    assert [x["type"] for x in events] == ["delta", "ping", "ping", "ping", "delta", "end"]
+    assert [x["text"] for x in events if x["type"] == "delta"] == [WEB_FILLERS[0] + " ", "Nuggets win."]
+    assert events[-1]["speech"] == WEB_FILLERS[0] + " Nuggets win."
+
+
+def test_stream_searching_answer_has_exactly_one_non_model_delta(env):
+    res = make_result("Answer.", model="claude-sonnet-5-5")
+    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED] * 4 + ["Answer."], res)])
+    events = list(e.handle_stream(req("why is the sky blue")))
+    deltas = [x["text"] for x in events if x["type"] == "delta"]
+    assert deltas == [FILLERS[0] + " ", "Answer."]
+    assert sum(1 for x in events if x["type"] == "ping") == 4
+
+
+def test_stream_ping_never_stored_in_history(env):
     res = make_result("Answer.", model="claude-sonnet-5-5")
     e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, "Answer."], res), (["More."], make_result("More."))])
     run(e, req("why is the sky blue", cid="c"))
     run(e, req("and then", cid="c"))
-    assert all(WEB_LINE not in str(m["content"]) for m in p.stream_calls[1]["messages"])
+    assert all(FILLERS[0] not in str(m["content"]) for m in p.stream_calls[1]["messages"])
 
 
 def test_stream_no_search_line_after_text(env):
@@ -766,41 +783,18 @@ def test_stream_pause_turn_seam_space(env):
     assert end["speech"].endswith("Part one. Part two.")
 
 
-def test_stream_bridges_non_live(env):
-    res = make_result("Answer.", model="claude-sonnet-5-5")
-    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED] * 4 + ["Answer."], res)])
-    deltas, end = run(e, req("why is the sky blue"))
-    assert deltas == [FILLERS[0] + " ", WEB_LINE, BRIDGES[0], BRIDGES[1], " ", "Answer."]
-    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + BRIDGES[0] + BRIDGES[1] + " Answer."
-
-
-def test_stream_bridges_live_route_from_second_search(env):
-    res = make_result("Nuggets win.", model="claude-sonnet-5-5")
-    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, SEARCH_STARTED, "Nuggets win."], res)])
-    deltas, _ = run(e, req("do the nuggets play tonight"))
-    assert deltas == [WEB_FILLERS[0] + " ", BRIDGES[0], BRIDGES[1], " ", "Nuggets win."]
-
-
-def test_stream_no_bridge_after_model_text(env):
+def test_stream_no_extra_text_for_searches_after_model_text(env):
     res = make_result("A B.", model="claude-sonnet-5-5")
     e, p, *_ = sbuild(env, streams=[(["A", SEARCH_STARTED, SEARCH_STARTED, " B."], res)])
     deltas, _ = run(e, req("why is the sky blue"))
     assert deltas == [FILLERS[0] + " ", "A", " B."]
 
 
-def test_stream_bridges_not_in_history(env):
-    res = make_result("Answer.", model="claude-sonnet-5-5")
-    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, SEARCH_STARTED, "Answer."], res), (["More."], make_result("More."))])
-    run(e, req("why is the sky blue", cid="c"))
-    run(e, req("and then", cid="c"))
-    assert all(BRIDGES[0] not in str(m["content"]) for m in p.stream_calls[1]["messages"])
-
-
 def test_stream_heartbeats_become_pings(env):
     res = make_result("Hi.", model="claude-sonnet-5-5")
     e, p, store, _ = sbuild(env, streams=[([HEARTBEAT, SEARCH_STARTED, HEARTBEAT, "Hi.", HEARTBEAT], res)])
     events = list(e.handle_stream(req("do the nuggets play tonight")))
-    assert [x["type"] for x in events] == ["delta", "ping", "ping", "delta", "ping", "end"]
+    assert [x["type"] for x in events] == ["delta", "ping", "ping", "ping", "delta", "ping", "end"]
     assert events[-1]["speech"] == WEB_FILLERS[0] + " " + "Hi."
     assert events[-1]["type"] == "end"
 
@@ -837,14 +831,3 @@ def test_soft_cap_still_downgrades_without_search_blocks(env):
     spend(store, env[0].soft_cap_usd + 0.01)
     e.handle(req("and more", cid="c"))
     assert store.recent()[0].tier == 1 and store.recent()[0].route_reason == "soft_cap"
-
-
-def test_stream_space_between_spoken_line_and_model_text(env):
-    res = make_result("Answer.", model="claude-sonnet-5-5")
-    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, " Answer."], res)])
-    deltas, end = run(e, req("why is the sky blue"))
-    assert deltas == [FILLERS[0] + " ", WEB_LINE, " Answer."]  # delta already starts with space
-    e, p, *_ = sbuild(env, streams=[([SEARCH_STARTED, "Answer."], res)])
-    deltas, end = run(e, req("why is the sky blue"))
-    assert deltas == [FILLERS[0] + " ", WEB_LINE, " ", "Answer."]
-    assert end["speech"] == FILLERS[0] + " " + WEB_LINE + " Answer."

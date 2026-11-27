@@ -41,7 +41,7 @@ What she can't do yet:
 - **Streaming answers** (PR #1): on longer questions she says a short "thinking" filler at once, then streams Claude's answer into ElevenLabs. On Sonnet, the first word now arrives 0.6–1.5 s after the question reaches the brain.
 - **Web search** (Anthropic's server-side search, Sonnet only):
   - Live questions route straight to Sonnet: news, headlines, scores, standings, prices, "open now", the 49ers/Nuggets, or a time word plus a game word. Kid talk ("chicken nuggets for dinner", "I won my game today") doesn't search.
-  - She says a web filler ("Let me look that up online real quick…"). If she searches more than once she adds "Still digging, almost there." The brain also sends silent keep-alive pings so Home Assistant doesn't give up.
+  - She says one filler (a web filler like "Let me look that up online real quick…" for live questions, a normal one otherwise), then stays quiet until the answer. During searches the brain sends silent keep-alive pings so Home Assistant doesn't give up.
   - Answers are spoken without links, in Pacific time.
   - Live results:
     - Nuggets schedule: 1 search, about 3.5¢, first word of the answer after 8.5 s.
