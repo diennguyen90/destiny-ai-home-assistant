@@ -61,6 +61,10 @@ class FakeHA:
         self.weather = weather
         self.forecast = forecast
         self.notifications = []
+        self.calendar = "calendar.family"
+        self.events = []
+        self.created = []
+        self.notify_ok = True
 
     def weather_line(self, entity_id):
         return self.weather
@@ -70,4 +74,14 @@ class FakeHA:
 
     def notify(self, service, title, message):
         self.notifications.append((service, title, message))
+        return self.notify_ok
+
+    def find_calendar(self, preferred=""):
+        return preferred or self.calendar
+
+    def calendar_events(self, entity_id, start, end):
+        return self.events
+
+    def create_calendar_event(self, entity_id, summary, **kw):
+        self.created.append(dict(entity_id=entity_id, summary=summary, **kw))
         return True

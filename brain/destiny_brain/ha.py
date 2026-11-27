@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -29,6 +29,7 @@ class HAClient:
         self._tz = ZoneInfo(tz)
         self._fcache: dict[tuple[str, int], tuple[datetime, str]] = {}
         self._cache: dict[str, tuple[datetime, str]] = {}
+        self._cal_cache: tuple[datetime, str | None] | None = None
 
     def weather_line(self, entity_id: str) -> str | None:
         now = self._clock()
@@ -126,4 +127,72 @@ class HAClient:
             return True
         except Exception:
             log.warning("notify failed")
+            return False
+
+    def find_calendar(self, preferred: str = "") -> str | None:
+        if preferred:
+            return preferred
+        now = self._clock()
+        if self._cal_cache and now - self._cal_cache[0] < _CACHE_TTL:
+            return self._cal_cache[1]
+        try:
+            resp = self._http.get(f"{self._base}/api/states", headers=self._headers, timeout=5)
+            resp.raise_for_status()
+            ids = sorted(
+                str(s["entity_id"]) for s in resp.json()
+                if str(s.get("entity_id", "")).startswith("calendar.")
+            )
+        except Exception:
+            log.warning("calendar discovery failed")
+            return None
+        found = ids[0] if ids else None
+        self._cal_cache = (now, found)
+        return found
+
+    def calendar_events(self, entity_id: str, start: datetime, end: datetime) -> list[dict] | None:
+        try:
+            resp = self._http.get(
+                f"{self._base}/api/calendars/{entity_id}",
+                headers=self._headers,
+                params={"start": start.isoformat(), "end": end.isoformat()},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data if isinstance(data, list) else None
+        except Exception:
+            log.warning("calendar lookup failed")
+            return None
+
+    def create_calendar_event(
+        self,
+        entity_id: str,
+        summary: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        location: str | None = None,
+    ) -> bool:
+        body: dict = {"entity_id": entity_id, "summary": summary}
+        if start_date is not None and end_date is not None:
+            body["start_date"] = start_date.isoformat()
+            body["end_date"] = end_date.isoformat()
+        elif start is not None and end is not None:
+            body["start_date_time"] = start.isoformat()
+            body["end_date_time"] = end.isoformat()
+        else:
+            return False
+        if location:
+            body["location"] = location
+        try:
+            resp = self._http.post(
+                f"{self._base}/api/services/calendar/create_event",
+                headers=self._headers, json=body, timeout=10,
+            )
+            resp.raise_for_status()
+            return True
+        except Exception:
+            log.warning("calendar create failed")
             return False
