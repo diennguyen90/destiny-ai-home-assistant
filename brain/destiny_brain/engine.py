@@ -5,15 +5,15 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .fillers import FillerPicker
 from .costs import Usage, cost_usd
-from .prompts import DESTINY_BASE, ESCALATE_TOOL, context_block
-from .providers.base import ProviderResult
+from .prompts import DESTINY_BASE, ESCALATE_TOOL, WEB_SEARCH_TOOL, context_block
+from .providers.base import HEARTBEAT, SEARCH_STARTED, ProviderResult
 from .router import clean_text, route
 from .store import RequestRecord
 
@@ -70,6 +70,8 @@ class _StreamState:
     cid: str
     cont: bool = False
     model_text: bool = False
+    last_text: str = ""
+    seam_pending: bool = False
     spoken: list[str] = field(default_factory=list)
 
 
@@ -107,11 +109,14 @@ class Engine:
                 return ConverseResponse(ERROR_LINE, cid or uuid.uuid4().hex, False)
 
     def handle_stream(self, req: ConverseRequest) -> Iterator[dict]:
-        """NDJSON event dicts: `delta` events, then exactly one `end`. Never raises."""
+        """NDJSON event dicts: `delta` and `ping` events, then exactly one `end`. Never raises."""
         st = _StreamState(req.conversation_id or "")
         inner = self._stream(req, st)
         try:
             for text in inner:
+                if text is HEARTBEAT:
+                    yield {"type": "ping"}
+                    continue
                 st.spoken.append(text)
                 yield {"type": "delta", "text": text}
         except Exception:
@@ -144,7 +149,9 @@ class Engine:
 
         decision = route(text, previous_tier)
         tier, reason = decision.tier, decision.reason
-        if tier == 2 and self._store.spend_today(now) >= self._s.soft_cap_usd:
+        if (tier == 2 and self._store.spend_today(now) >= self._s.soft_cap_usd
+                and not self._has_server_blocks(history)):
+            # (a history with server-tool blocks must stay on tier 2: Haiku has no web search tool)
             tier, reason = 1, "soft_cap"
             self._notify_soft_cap(now)
 
@@ -154,6 +161,14 @@ class Engine:
                               {"role": "system", "content": self._context(now)}]
         system = [{"type": "text", "text": DESTINY_BASE, "cache_control": {"type": "ephemeral"}}]
         return _Plan(cid, req, len(text), tier, reason, messages, system, now, time.monotonic())
+
+    @staticmethod
+    def _has_server_blocks(history: list[dict]) -> bool:
+        return any(
+            isinstance(b, dict) and b.get("type") in ("server_tool_use", "web_search_tool_result")
+            for m in history if m.get("role") == "assistant" and isinstance(m.get("content"), list)
+            for b in m["content"]
+        )
 
     def _handle(self, req: ConverseRequest) -> ConverseResponse:
         plan = self._plan(req)
@@ -167,11 +182,38 @@ class Engine:
                 if self._escalated(result):
                     tier, reason, result = 2, "escalated", None
             if result is None:
-                result = self._call(tier, reason, plan.system, plan.messages, [], plan.cid, req, plan.chars,
-                                    plan.now)
+                result = self._call_paused(plan, tier, reason)
         except Exception as exc:
             return self._fail(exc, plan, tier, reason)
         return self._finish(plan, tier, reason, result)
+
+    def _call_paused(self, plan: _Plan, tier: int, reason: str) -> ProviderResult:
+        """Tier-2 call; a pause_turn is continued once (if time allows) and merged into one result."""
+        first = self._call(tier, reason, plan.system, plan.messages, [], plan.cid, plan.req, plan.chars, plan.now)
+        if first.stop_reason != "pause_turn":
+            return first
+        try:
+            second = self._call(tier, reason, plan.system, self._continuation(plan, first), [], plan.cid,
+                                plan.req, plan.chars, plan.now)
+        except _DeadlineExceeded:
+            log.warning("pause_turn not continued: deadline")
+            return first
+        return self._merge(first, second)
+
+    @staticmethod
+    def _continuation(plan: _Plan, first: ProviderResult) -> list[dict]:
+        return plan.messages + [{"role": "assistant", "content": first.content}]
+
+    @staticmethod
+    def _merge(first: ProviderResult, second: ProviderResult) -> ProviderResult:
+        a, b = first.usage, second.usage
+        usage = Usage(a.input_tokens + b.input_tokens, a.output_tokens + b.output_tokens,
+                      a.cache_read_tokens + b.cache_read_tokens, a.cache_write_tokens + b.cache_write_tokens,
+                      a.web_search_requests + b.web_search_requests)
+        a_txt, b_txt = first.text, second.text
+        seam = " " if a_txt and b_txt and not a_txt[-1].isspace() and not b_txt[0].isspace() else ""
+        return replace(second, text=a_txt + seam + b_txt, content=first.content + second.content,
+                       usage=usage, tool_calls=first.tool_calls + second.tool_calls)
 
     @staticmethod
     def _escalated(result: ProviderResult) -> bool:
@@ -194,6 +236,10 @@ class Engine:
         cid, req, chars = plan.cid, plan.req, plan.chars
         if result.stop_reason == "refusal":
             return self._respond(REFUSAL_LINE, cid, req, tier, result.model, reason, "refusal", chars, log_it=False)
+        if result.stop_reason == "pause_turn":  # could not be continued: speak what we have, store nothing
+            if result.text.strip():
+                return ConverseResponse(result.text, cid, False)
+            return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":paused", "error", chars)
         if not result.text.strip():
             return self._respond(ERROR_LINE, cid, req, tier, result.model, reason + ":empty_text", "error", chars)
         with self._lock:
@@ -226,9 +272,9 @@ class Engine:
                 yield resp.speech
                 return
             tier, reason = 2, "escalated"
-        yield self._fillers.pick(req.device_id) + " "
+        yield self._fillers.pick(req.device_id, "web" if reason == "live" else "normal") + " "
         try:
-            result = yield from self._stream_call(plan, tier, reason, st)
+            result = yield from self._stream_paused(plan, tier, reason, st)
         except Exception as exc:
             resp = self._fail(exc, plan, tier, reason)
             yield LOST_LINE if st.model_text else resp.speech
@@ -241,8 +287,22 @@ class Engine:
         elif not st.model_text:
             yield resp.speech
 
-    def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
-        """One streamed model call (no tools), logged. Returns the ProviderResult."""
+    def _stream_paused(self, plan: _Plan, tier: int, reason: str, st: _StreamState) -> Iterator[str]:
+        """Streamed tier-2 call; a pause_turn is continued once (streaming too) and merged."""
+        first = yield from self._stream_call(plan, tier, reason, st, plan.messages)
+        if first.stop_reason != "pause_turn":
+            return first
+        st.seam_pending = bool(st.last_text) and not st.last_text[-1].isspace()
+        try:
+            second = yield from self._stream_call(plan, tier, reason, st, self._continuation(plan, first))
+        except _DeadlineExceeded:
+            log.warning("pause_turn not continued: deadline")
+            return first
+        return self._merge(first, second)
+
+    def _stream_call(self, plan: _Plan, tier: int, reason: str, st: _StreamState,
+                     messages: list[dict]) -> Iterator[str]:
+        """One streamed model call (server tools on tier 2), logged. Returns the ProviderResult."""
         model = self._model(tier)
         effort = self._s.tier1_effort if tier == 1 else self._s.tier2_effort
         remaining = TOTAL_BUDGET_S - (self._clock() - plan.now).total_seconds()  # deadline: first token
@@ -250,8 +310,8 @@ class Engine:
             raise _DeadlineExceeded()
         call_start = time.monotonic()
         gen = self._provider.stream(
-            model=model, system=plan.system, messages=plan.messages, tools=[], effort=effort, max_tokens=1024,
-            timeout=max(MIN_CALL_S, remaining),
+            model=model, system=plan.system, messages=messages, tools=[], effort=effort, max_tokens=1024,
+            timeout=max(MIN_CALL_S, remaining), server_tools=[WEB_SEARCH_TOOL] if tier == 2 else None,
         )
         first_ms = None
         result: ProviderResult | None = None
@@ -262,11 +322,22 @@ class Engine:
                 except StopIteration as stop:
                     result = stop.value
                     break
+                if delta is HEARTBEAT:
+                    yield HEARTBEAT
+                    continue
+                if delta is SEARCH_STARTED:
+                    yield HEARTBEAT  # silent keep-alive (ping event); never spoken or stored
+                    continue
                 if not delta:
                     continue
+                if st.seam_pending:
+                    st.seam_pending = False
+                    if not delta[0].isspace():
+                        yield " "  # pause_turn continuation starts a new text block
                 if first_ms is None:
                     first_ms = int((time.monotonic() - plan.mono0) * 1000)
                 st.model_text = True
+                st.last_text = delta
                 yield delta
         finally:
             gen.close()  # stops provider billing if we were closed early
@@ -289,7 +360,7 @@ class Engine:
         start = time.monotonic()
         result = self._provider.complete(
             model=model, system=system, messages=messages, tools=tools, effort=effort, max_tokens=1024,
-            timeout=max(MIN_CALL_S, remaining),
+            timeout=max(MIN_CALL_S, remaining), server_tools=[WEB_SEARCH_TOOL] if tier == 2 else None,
         )
         latency = int((time.monotonic() - start) * 1000)
         escalated = self._escalated(result)
@@ -306,6 +377,7 @@ class Engine:
             ts_utc=self._clock(), conversation_id=cid, device_id=req.device_id, tier=tier, model=model,
             route_reason=reason, usage=usage, cost_usd=cost, latency_ms=latency, outcome=outcome,
             text_chars=chars, first_token_ms=first_token_ms,
+            web_searches=usage.web_search_requests or None,
         ))
 
     def _price(self, model, requested):

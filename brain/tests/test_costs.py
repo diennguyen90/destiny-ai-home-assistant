@@ -13,3 +13,7 @@ def test_cost_usd_sonnet():
 def test_cost_includes_cache():
     u = Usage(0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000)
     assert cost_usd(SONNET, u) == pytest.approx(0.10 + 2.50)
+
+
+def test_cost_includes_web_search():
+    assert cost_usd(SONNET, Usage(0, 0, web_search_requests=3)) == pytest.approx(0.03)

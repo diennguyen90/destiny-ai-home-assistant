@@ -95,3 +95,30 @@ def test_store_migrates_first_token_ms(tmp_path):
     got = {r.conversation_id: r for r in s.recent()}
     assert got["new"].first_token_ms == 420
     assert got["old"].first_token_ms is None
+
+
+def test_store_migrates_web_searches(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old2.db")
+    c = sqlite3.connect(path)
+    c.executescript("""
+    CREATE TABLE requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts_utc TEXT NOT NULL, conversation_id TEXT NOT NULL,
+        device_id TEXT, tier INTEGER NOT NULL, model TEXT, route_reason TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+        cache_read_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL,
+        cost_usd REAL NOT NULL, latency_ms INTEGER NOT NULL, outcome TEXT NOT NULL,
+        text_chars INTEGER NOT NULL, first_token_ms INTEGER);
+    INSERT INTO requests (ts_utc, conversation_id, tier, route_reason, input_tokens, output_tokens,
+        cache_read_tokens, cache_write_tokens, cost_usd, latency_ms, outcome, text_chars)
+        VALUES ('2026-11-17T09:00:00.000000+00:00','old',1,'x',1,1,0,0,0.1,5,'ok',3);
+    """)
+    c.commit()
+    c.close()
+    s = Store(path, "America/Los_Angeles")
+    s.init()
+    s.init()  # idempotent
+    s.log(rec(utc(2026, 11, 17, 10, 0), 0.2, conversation_id="new", web_searches=2))
+    got = {r.conversation_id: r for r in s.recent()}
+    assert got["new"].web_searches == 2
+    assert got["old"].web_searches is None

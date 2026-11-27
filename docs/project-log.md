@@ -4,19 +4,19 @@ A running record of what's built, what was decided and why, and what's next. New
 
 ## Current status
 
-**Phase 2 milestone 1 (Destiny's brain, parity with Phase 1): built, awaiting live verification.**
+**Phase 2: brain live, with streaming answers and internet search (2026-11-26).**
 
-The brain service, tier routing, spend caps, parent cost page and the Home Assistant "Destiny brain" conversation agent are in. Setup: [setup guide](setup-windows.md) section 9. The smoke test now has a `brain` check (7 checks), and its weather checks fail when Destiny says she can't see the weather. Next: the family runs the live smoke test and switches the Destiny assistant to "Destiny brain".
+Destiny runs through her own brain with Haiku/Sonnet routing, spend caps, a parent cost page, streamed answers with thinking fillers, and web search for live questions. Voice: ElevenLabs "Serena" (Piper as fallback). Smoke test: 7/7.
 
-Phase 1 status:
+What she can do now:
+- general questions, explanations and homework help (hints, not answers)
+- stories, jokes and quizzes, translation, time and date, timers, the shopping list
+- current home weather and a 3-day forecast
+- live questions from the web: news, sports (the 49ers and Nuggets by default), schedules, prices
 
-**Phase 1 (working voice prototype): done, verified live 2026-11-17.**
-
-Destiny answers spoken questions through the Voice PE ("Okay Nabu"), with follow-ups, a tutor-style personality and the cori (high) voice. Smoke test: 6/6.
-
-What she can do now: general questions, explanations and homework help (hints, not answers), stories, jokes and quizzes, translation, time and date, timers, the shopping list, and current home weather.
-
-What she can't do yet: current events or web lookups, weather forecasts, memory between conversations, knowing who is speaking, reminders, calendar, music, or smart-device control (deliberately off).
+What she can't do yet:
+- calendar and reminders (next)
+- knowing who is speaking, music, smart-device control (deliberately off)
 
 ## Roadmap (reprioritised 2026-11-07: learning first, smart home second)
 
@@ -35,6 +35,24 @@ What she can't do yet: current events or web lookups, weather forecasts, memory 
    - move to an always-on mini PC
 
 ## Log
+
+### 2026-11-26: Internet search, plus streaming answers
+
+- **Streaming answers** (PR #1): on longer questions she says a short "thinking" filler at once, then streams Claude's answer into ElevenLabs. On Sonnet, the first word now arrives 0.6–1.5 s after the question reaches the brain.
+- **Web search** (Anthropic's server-side search, Sonnet only):
+  - Live questions route straight to Sonnet: news, headlines, scores, standings, prices, "open now", the 49ers/Nuggets, or a time word plus a game word. Kid talk ("chicken nuggets for dinner", "I won my game today") doesn't search.
+  - She says one filler (a web filler like "Let me look that up online real quick…" for live questions, a normal one otherwise), then stays quiet until the answer. During searches the brain sends silent keep-alive pings so Home Assistant doesn't give up.
+  - Answers are spoken without links, in Pacific time.
+  - Live results:
+    - Nuggets schedule: 1 search, about 3.5¢, first word of the answer after 8.5 s.
+    - News headlines and the last 49ers score (2–3 searches): longest silence 3.4 s.
+  - Cost: about 1¢ per search plus reading. A "Searches" column is on the parent page, and searches count toward the $1/$3 daily caps. After the soft cap, a conversation that already searched stays on Sonnet, because Haiku can't read search results.
+- **Incidents on 2026-11-18** (added to troubleshooting):
+  - Docker Desktop's port forwarding stalled, so the Voice PE couldn't fetch audio. Restarting Docker Desktop fixed it.
+  - An ElevenLabs outage left its setup stuck, so we used Piper and then restarted Home Assistant.
+  - Later, the Claude API key was replaced, causing 401 errors. Updated `.env` and recreated the brain.
+- **Next:** calendar and reminders (Google Calendar, reminders sent to the phone), then the "Destiny" wake word.
+- Spec: [web search design](superpowers/specs/2026-11-26-web-search-design.md); plan: [web search plan](superpowers/plans/2026-11-26-web-search.md).
 
 ### 2026-11-17 (evening): Voice, forecast and live fixes
 

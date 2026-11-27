@@ -179,6 +179,14 @@ The light ring reacts to you, but no answer is spoken.
 - Cause 2: Windows Firewall blocks port 8123, or the PC's network is set to Public. Fix: add the inbound rule for TCP 8123 on the Private network ([Voice PE setup](voice-pe-setup.md), step 3), and make sure your home network profile is Private.
 - Also confirm the Voice PE and the PC are on the same network, and that the PC's IP address has not changed (use a DHCP reservation).
 
+### The ring spins (blue or red) but she never speaks, after a restart or sleep
+
+Two causes seen in practice (2026-11-18):
+
+- **Docker's port forwarding stalled.** The brain still answers (its log shows `POST /v1/converse/stream 200`), but nothing outside Docker can reach Home Assistant: `curl http://<PC IP>:8123/manifest.json` returns nothing or "empty reply". The Voice PE can't download the spoken answer. Fix: quit and restart Docker Desktop (or run `wsl --shutdown`, then start Docker Desktop).
+- **ElevenLabs is down or stuck starting.** Pulsing red ring; the HA pipeline debug says "Text-to-speech engine … does not support language en". Settings > Devices & services shows ElevenLabs stuck "Initializing". Check https://status.elevenlabs.io. Quick fix: Settings > Voice assistants > Destiny > Text-to-speech > Piper. When ElevenLabs is healthy again, restart the Home Assistant container (a stuck setup won't retry on its own) and switch back to Serena.
+- If the brain log shows `401 ... invalid x-api-key`, the Claude API key in `.env` was deleted or replaced: make a new key in the Anthropic Console, update `ANTHROPIC_API_KEY`, then `docker compose up -d --no-deps --force-recreate brain`.
+
 ### The wake word never triggers
 
 - Check the Voice PE is set to the `Destiny` assistant with a wake word ([Voice PE setup](voice-pe-setup.md), step 6), its mute switch is off, and you are within a couple of metres. "Okay Nabu" is the device default; try it if "Hey Jarvis" is unreliable.
@@ -194,7 +202,17 @@ The light ring reacts to you, but no answer is spoken.
 First decide which of these you are seeing.
 
 - She has no weather at all (cannot tell you the current temperature or sky). Cause: the weather entity is not exposed to the assistant, or the Met.no weather integration is not installed. Fix: go to Settings > Voice assistants > Expose tab and make sure the weather entity ("Home" with a sun icon, id like `weather.home`; the exact id can differ, search 'weather' under Settings > Devices & services > Entities) is exposed. If it does not exist, add the "Meteorologisk institutt (Met.no)" integration (setup guide, section 3).
-- She knows the current conditions but says she can't see tomorrow's forecast. This is expected in Phase 1: Destiny sees current conditions (temperature, sky, humidity) but not forecasts. Forecasts and web access come in Phase 2.
+- She knows the current conditions but says she can't see tomorrow's forecast. This is expected in Phase 1: Destiny sees current conditions (temperature, sky, humidity) but not forecasts. Since Phase 2 she also gets a 3-day forecast, and she can search the web for live questions.
+
+### She says a "thinking" phrase before answering
+
+That's on purpose. On longer questions she says a short filler ("Hmm, let me put my thinking cap on…") straight away, then streams the answer. On questions that need the internet she says a web filler instead ("One sec, I'm surfing through the web…"), and then stays quiet (silent keep-alive pings, no extra phrases) while she searches. If the answer stream breaks partway through she says "Sorry, I lost my train of thought." and the turn isn't remembered: just ask again.
+
+### Internet answers (sports, news, schedules)
+
+- She searches only for live questions: news, headlines, scores, standings, prices, "open now", the 49ers or Nuggets, or a time word plus a game word ("who won the game last night"). Everyday questions and weather don't search.
+- Each search costs about 1 cent plus reading time, and shows in the "Searches" column on the parent page (`http://<PC IP>:8000/parent`). Searches count toward the $1 soft and $3 hard daily caps.
+- Search answers take a few seconds longer (about 5–9 s to the first word of the answer). If she answers a live question without searching, ask again with "look it up" or "search the web".
 
 ### Claude can control devices I did not expect
 
