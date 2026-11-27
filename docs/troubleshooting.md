@@ -124,6 +124,34 @@ You see HTTP 401 from `/v1/converse` in `docker compose logs brain`, or Home Ass
 - Cause: Destiny could not see the weather. The brain reads `HA_WEATHER_ENTITY` using `BRAIN_HA_TOKEN`.
 - Fix: check the weather entity id in Developer tools > States, check `BRAIN_HA_URL` and `BRAIN_HA_TOKEN` in `.env`, then run `docker compose up -d --build`.
 
+## Reminders and calendar problems
+
+### A reminder didn't arrive on the phone
+
+- Cause: the notification could not be delivered, or the phone is blocking it.
+- Fix:
+  1. Check the Home Assistant Companion app on the phone is signed in and allowed to send notifications (iPhone Settings > Notifications > Home Assistant), and that Focus or Do Not Disturb isn't hiding it.
+  2. Check the notify service name. Reminders go to `DESTINY_REMINDER_NOTIFY`, or `DESTINY_NOTIFY_SERVICE` if that isn't set (today `mobile_app_iphone`). In Home Assistant, Developer tools > Actions, search for `notify.` and make sure that exact service exists. If you change `.env`, run `docker compose up -d --no-deps --force-recreate brain`.
+  3. Read `docker compose logs brain --tail 100` and look for `notify failed`. A failed reminder stays pending and is retried every 15 seconds, and is given up on after 20 failures.
+- Good to know:
+  - If the brain was down when a reminder was due, it is sent late, starting with "(Late)". More than 24 hours late, it is dropped.
+  - Reminders are one-time only, and all go to the one phone.
+  - Ask "What reminders do I have?" to see what is still waiting.
+
+### She says "The family calendar isn't connected yet."
+
+- Cause: Home Assistant has no calendar yet, or the brain hasn't noticed it. She looks for the first `calendar.*` entity (or `DESTINY_CALENDAR_ENTITY`) and remembers the answer for up to 5 minutes.
+- Fix: follow the [Google Calendar setup guide](google-calendar-setup.md). If it is already linked, check Developer tools > States for a `calendar.` entity, wait up to 5 minutes, and ask again. If `DESTINY_CALENDAR_ENTITY` is set, check the id is spelled exactly as it is in Home Assistant.
+
+### She reads the wrong calendar
+
+- Fix: set `DESTINY_CALENDAR_ENTITY=calendar.xxx` in `.env`, then run `docker compose up -d --no-deps --force-recreate brain`. See the last section of the setup guide.
+
+### The calendar worked, then stopped after about a week
+
+- Cause: the Google app was left in "Testing", so Google ends the sign-in every 7 days.
+- Fix: in Google Cloud, Audience > **Publish app**, then in Home Assistant sign in to Google Calendar again when it asks.
+
 ## Docker and startup problems
 
 ### Can't connect to localhost:8123

@@ -13,9 +13,10 @@ What she can do now:
 - stories, jokes and quizzes, translation, time and date, timers, the shopping list
 - current home weather and a 3-day forecast
 - live questions from the web: news, sports (the 49ers and Nuggets by default), schedules, prices
+- one-time reminders pushed to the phone, and reading or adding calendar events (once Google Calendar is linked)
 
 What she can't do yet:
-- calendar and reminders (next)
+- Google Calendar is not linked yet (family to follow the [setup guide](google-calendar-setup.md))
 - knowing who is speaking, music, smart-device control (deliberately off)
 
 ## Roadmap (reprioritised 2026-11-07: learning first, smart home second)
@@ -35,6 +36,19 @@ What she can't do yet:
    - move to an always-on mini PC
 
 ## Log
+
+### 2026-11-26: Reminders and calendar
+
+- **Reminders** (built, one-time only):
+  - "Remind me at 5 to take out the trash" or "in 20 minutes". She can list and cancel them too.
+  - The brain stores them in its own database and a background scheduler checks every 15 seconds, then pushes each one to the phone through HA notify (`mobile_app_iphone`). They survive restarts. More than 5 minutes late is sent as "(Late)"; more than 24 hours late is dropped.
+  - Limits: 200 characters, up to a year ahead, 50 pending.
+  - Reminders don't touch Google Calendar (a deliberate choice, to avoid clutter).
+- **Calendar**: she reads events for a day or up to 14 days, and adds events (timed or all day). Editing and deleting events isn't supported. Any HA calendar entity works: the brain uses `DESTINY_CALENDAR_ENTITY` or else the first `calendar.*` it finds (cached 5 minutes). Until one exists she says "The family calendar isn't connected yet."
+- **Household tool loop**: the brain runs these tools itself (up to 3 rounds per answer), and reminder or calendar words route to Haiku.
+- **To do (family):** link Google Calendar in Home Assistant using the [setup guide](google-calendar-setup.md) (Web application OAuth client; publish the app so it doesn't expire weekly). Then verify with "What's on our calendar today?".
+- **Next:** speaker awareness and per-person reminders, then the "Destiny" wake word.
+- Spec: [calendar and reminders design](superpowers/specs/2026-11-26-calendar-reminders-design.md); plan: [calendar and reminders plan](superpowers/plans/2026-11-26-calendar-reminders.md).
 
 ### 2026-11-26: Internet search, plus streaming answers
 
