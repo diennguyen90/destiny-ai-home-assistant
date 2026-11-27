@@ -6,7 +6,8 @@ def make_result(text="Hello there.", model="claude-haiku-5-5", stop_reason="end_
                 tool_calls=None, usage=Usage(100, 20), content=None):
     content = content or [{"type": "text", "text": text}]
     if tool_calls:
-        content = [{"type": "tool_use", "id": "tu_1", "name": n, "input": i} for n, i in tool_calls]
+        content = [{"type": "tool_use", "id": f"tu_{k}", "name": n, "input": i}
+                   for k, (n, i) in enumerate(tool_calls, 1)]
     return ProviderResult(text=text, content=content, tool_calls=list(tool_calls or []),
                           stop_reason=stop_reason, usage=usage, model=model)
 

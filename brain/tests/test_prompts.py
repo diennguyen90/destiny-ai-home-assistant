@@ -26,3 +26,8 @@ def test_web_search_tool_verbatim():
 
 def test_prompt_says_not_to_announce_searching():
     assert "announce" in DESTINY_BASE and "searching" in DESTINY_BASE
+
+
+def test_prompt_has_household_tool_guidance():
+    assert "Use your tools for reminders and the family calendar." in DESTINY_BASE
+    assert "Never say a reminder or event is set unless the tool confirmed it" in DESTINY_BASE
